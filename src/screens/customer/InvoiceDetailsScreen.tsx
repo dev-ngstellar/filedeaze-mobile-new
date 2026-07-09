@@ -36,6 +36,7 @@ import { AppLoader } from "../../components/AppLoader";
 import { AppButton } from "../../components/AppButton";
 import { AppCard } from "../../components/AppCard";
 import { AppAlertModal } from "../../components/AppAlertModal";
+import { PaymentBreakdownCard } from "../../components/PaymentBreakdownCard";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "InvoiceDetails">;
 type RouteProps = RouteProp<CustomerStackParamList, "InvoiceDetails">;
@@ -347,178 +348,42 @@ export const InvoiceDetailsScreen = () => {
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-        {/* Premium Invoice Sheet */}
-        <AppCard style={[styles.invoiceSheet, { borderColor: theme.colors.border }]}>
+        <PaymentBreakdownCard
+          invoiceNo={invoiceNumber}
+          ticketNo={ticketNumber}
+          customerName={invoice.ticket?.customer?.name || "Customer"}
+          baseAmount={baseAmount}
+          extraCharges={extraCharges}
+          gstEnabled={invoice.gstPercent > 0}
+          gstPercent={invoice.gstPercent}
+          gstAmount={gstAmount}
+          totalAmount={totalAmount}
+          collectedAmount={totalAmount}
+          paymentMode={paymentMethod}
+          paymentStatus={paymentStatus}
+          invoiceDate={formatDate(invoice.generatedAt)}
+          currency="₹"
+        />
 
-          {/* Branded Header */}
-          <View style={styles.invoiceHeader}>
-            <View>
-              <Text style={[styles.brandName, { color: theme.colors.primary }]}>
-                {tenant?.companyName || "FIELDEAZE"}
-              </Text>
-              <Text style={[styles.brandSub, { color: theme.colors.textMuted }]}>
-                Reliable On-Demand Services
-              </Text>
-              {tenant?.address && (
-                <Text style={[styles.tenantAddress, { color: theme.colors.textMuted }]}>
-                  {tenant.address}{tenant.city ? `, ${tenant.city}` : ""}{tenant.state ? `, ${tenant.state}` : ""}
-                </Text>
-              )}
-            </View>
-            <View style={[styles.paidBadge, { backgroundColor: `${paymentStatusColor}18` }]}>
-              {isPaid ? (
-                <Check size={13} color={paymentStatusColor} style={{ marginRight: 4 }} />
-              ) : (
-                <Clock size={13} color={paymentStatusColor} style={{ marginRight: 4 }} />
-              )}
-              <Text style={[styles.paidText, { color: paymentStatusColor }]}>
-                {isPaid ? "PAID" : (paymentStatus || "PENDING")}
+        {/* Technician Info */}
+        {invoice.ticket?.technician && (
+          <AppCard style={{ marginTop: 16, backgroundColor: `${theme.colors.primary}08`, borderColor: `${theme.colors.primary}20` }}>
+            <View style={styles.techRow}>
+              <User size={13} color={theme.colors.primary} style={{ marginRight: 6 }} />
+              <Text style={[styles.techLabel, { color: theme.colors.textMuted }]}>Technician</Text>
+              <Text style={[styles.techValue, { color: theme.colors.text }]}>
+                {"  "}{invoice.ticket.technician.name}
               </Text>
             </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-          {/* Invoice Meta */}
-          <View style={styles.metaGrid}>
-            <View>
-              <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>INVOICE NUMBER</Text>
-              <Text style={[styles.metaValue, { color: theme.colors.text }]}>#{invoiceNumber}</Text>
-            </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>DATE</Text>
-              <Text style={[styles.metaValue, { color: theme.colors.text }]}>{formatDate(invoice.generatedAt)}</Text>
-            </View>
-          </View>
-
-          <View style={[styles.metaGrid, { marginTop: 12 }]}>
-            <View>
-              <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>TICKET NUMBER</Text>
-              <Text style={[styles.metaValue, { color: theme.colors.text }]}>
-                {ticketNumber}
+            <View style={[styles.techRow, { marginTop: 4 }]}>
+              <PhoneCall size={13} color={theme.colors.primary} style={{ marginRight: 6 }} />
+              <Text style={[styles.techLabel, { color: theme.colors.textMuted }]}>Contact</Text>
+              <Text style={[styles.techValue, { color: theme.colors.text }]}>
+                {"  "}{invoice.ticket.technician.phone}
               </Text>
             </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>PRIORITY</Text>
-              <Text style={[styles.metaValue, { color: theme.colors.text }]}>
-                {invoice.ticket?.priority || "—"}
-              </Text>
-            </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-          {/* Service Info */}
-          <Text style={[styles.sectionHeading, { color: theme.colors.textMuted }]}>SERVICE DETAILS</Text>
-          <View style={styles.itemRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.itemName, { color: theme.colors.text }]}>
-                {invoice.ticket?.subCategory?.name || "General Service"}
-              </Text>
-              <Text style={[styles.itemCategory, { color: theme.colors.textMuted }]}>
-                {invoice.ticket?.subCategory?.category?.name || ""}
-              </Text>
-              {invoice.ticket?.description && (
-                <Text style={[styles.itemDesc, { color: theme.colors.textMuted }]} numberOfLines={2}>
-                  {invoice.ticket.description}
-                </Text>
-              )}
-            </View>
-            <Text style={[styles.itemPrice, { color: theme.colors.text }]}>
-              ₹{baseAmount.toLocaleString("en-IN")}
-            </Text>
-          </View>
-
-          {/* Technician Info */}
-          {invoice.ticket?.technician && (
-            <View style={[styles.techBox, { backgroundColor: `${theme.colors.primary}08`, borderColor: `${theme.colors.primary}20` }]}>
-              <View style={styles.techRow}>
-                <User size={13} color={theme.colors.primary} style={{ marginRight: 6 }} />
-                <Text style={[styles.techLabel, { color: theme.colors.textMuted }]}>Technician</Text>
-                <Text style={[styles.techValue, { color: theme.colors.text }]}>
-                  {"  "}{invoice.ticket.technician.name}
-                </Text>
-              </View>
-              <View style={[styles.techRow, { marginTop: 4 }]}>
-                <PhoneCall size={13} color={theme.colors.primary} style={{ marginRight: 6 }} />
-                <Text style={[styles.techLabel, { color: theme.colors.textMuted }]}>Contact</Text>
-                <Text style={[styles.techValue, { color: theme.colors.text }]}>
-                  {"  "}{invoice.ticket.technician.phone}
-                </Text>
-              </View>
-            </View>
-          )}
-
-          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-          {/* Totals Block */}
-          <View style={[styles.totalsBlock, { backgroundColor: `${theme.colors.primary}06` }]}>
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: theme.colors.textMuted }]}>Base Charges</Text>
-              <Text style={[styles.totalVal, { color: theme.colors.text }]}>
-                ₹{baseAmount.toLocaleString("en-IN")}
-              </Text>
-            </View>
-            <View style={[styles.totalRow, { marginTop: 8 }]}>
-              <Text style={[styles.totalLabel, { color: theme.colors.textMuted }]}>Extra Charges</Text>
-              <Text style={[styles.totalVal, { color: theme.colors.text }]}>
-                ₹{extraCharges.toLocaleString("en-IN")}
-              </Text>
-            </View>
-            <View style={[styles.totalRow, { marginTop: 8 }]}>
-              <Text style={[styles.totalLabel, { color: theme.colors.textMuted }]}>
-                {invoice.gstPercent > 0 ? `GST (${invoice.gstPercent}%)` : 'GST'}
-              </Text>
-              <Text style={[styles.totalVal, { color: theme.colors.text }]}>
-                ₹{gstAmount.toLocaleString("en-IN")}
-              </Text>
-            </View>
-            <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-            <View style={styles.totalRow}>
-              <Text style={[styles.grandTotalLabel, { color: theme.colors.text }]}>Total Amount</Text>
-              <Text style={[styles.grandTotalVal, { color: theme.colors.primary }]}>
-                ₹{totalAmount.toLocaleString("en-IN")}
-              </Text>
-            </View>
-          </View>
-
-          {/* Payment Info */}
-          {(invoice.payment || paymentMethod !== "—") && (
-            <>
-              <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-              <Text style={[styles.sectionHeading, { color: theme.colors.textMuted }]}>PAYMENT DETAILS</Text>
-              <View style={styles.paymentGrid}>
-                <View>
-                  <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>METHOD</Text>
-                  <View style={styles.methodRow}>
-                    <CreditCard size={13} color={theme.colors.primary} style={{ marginRight: 5 }} />
-                    <Text style={[styles.metaValue, { color: theme.colors.text }]}>
-                      {paymentMethod}
-                    </Text>
-                  </View>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>STATUS</Text>
-                  <View style={[styles.statusPill, { backgroundColor: `${paymentStatusColor}15` }]}>
-                    <Text style={[styles.statusPillText, { color: paymentStatusColor }]}>
-                      {isPaid ? "✓ Collected" : paymentStatus}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-              {collectedAt && (
-                <View style={[styles.metaGrid, { marginTop: 10 }]}>
-                  <View>
-                    <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>COLLECTED AT</Text>
-                    <Text style={[styles.metaValueSm, { color: theme.colors.text }]}>
-                      {formatDateTime(collectedAt)}
-                    </Text>
-                  </View>
-                </View>
-              )}
-            </>
-          )}
-        </AppCard>
+          </AppCard>
+        )}
 
         {/* Action Buttons */}
         <View style={styles.btnRow}>

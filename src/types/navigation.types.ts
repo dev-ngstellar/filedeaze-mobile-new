@@ -34,22 +34,11 @@ export type CustomerStackParamList = {
 export type TechnicianStackParamList = {
   PostLoginSplash: undefined;
   TechnicianHome: undefined;
-  TechnicianJobDetails: { jobId: string };
+  TechnicianJobDetails: { jobId: string; openCompleteJob?: boolean; openMarkPending?: boolean };
   TechnicianInvoiceList: undefined;
   // Batch 1 — List Screens
   AttendanceHistory: undefined;
   AssignedJobs: { initialTab?: "ALL" | "ASSIGNED" | "ACCEPTED" | "IN_PROGRESS" | "PENDING" | "COMPLETED" } | undefined;
-  // Batch 2 — Job Lifecycle Actions
-  AcceptTicket: { jobId: string; ticketNo: string; customerName: string; service: string }; // CHANGED: Add service parameter to match screen expectations and navigation call
-  RejectTicket: { jobId: string; ticketNo: string };
-  ReachLocation: { jobId: string; ticketNo: string; address: string };
-  // Batch 3 — Work Execution
-  StartJob: { jobId: string; ticketNo: string };
-  MarkPending: { jobId: string; ticketNo: string };
-  // Batch 4 — Completion Flow
-  CompleteJob: { jobId: string; ticketNo: string; customerName: string; startStep?: number };
-  CustomerSignature: { jobId: string; ticketNo: string; customerName: string };
-  PaymentCollection: { jobId: string; ticketNo: string; amount?: number };
   // Workflow Integration Screens
   CheckIn: undefined;
   CheckOut: undefined;

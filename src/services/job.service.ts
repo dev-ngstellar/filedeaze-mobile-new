@@ -8,16 +8,18 @@ import { APP_CONFIG } from "../config/app.config";
 // ==========================================
 
 export type TicketStatus =
-  | "NEW"
+  | "NEW_TICKET"
   | "ASSIGNED"
   | "ACCEPTED"
   | "TRAVELLING"
-  | "REACHED"
+  | "REACHED_LOCATION"
   | "IN_PROGRESS"
   | "PENDING"
-  | "RESCHEDULED"
   | "COMPLETED"
-  | "CLOSED";
+  | "INVOICE_GENERATED"
+  | "TICKET_CLOSED"
+  | "CANCELLED"
+  | "RESCHEDULED";
 
 export type TicketPriority = "URGENT" | "HIGH" | "MEDIUM" | "LOW";
 
@@ -147,11 +149,11 @@ export function normalizeTicket(raw: any): Ticket {
     service: raw.subCategory?.name ?? raw.service ?? "—",
     category: raw.subCategory?.category?.name ?? raw.category ?? "",
     description: raw.description ?? "",
-    status: raw.status === "REACHED_LOCATION" ? "REACHED" : raw.status === "NEW_TICKET" ? "NEW" : raw.status === "TICKET_CLOSED" ? "CLOSED" : (raw.status ?? "ASSIGNED"),
+    status: raw.status ?? "ASSIGNED",
     priority: raw.priority ?? undefined,
     scheduledDate,
     scheduledTime,
-    address: raw.serviceAddress ?? raw.address ?? "—",
+    address: raw.serviceAddress ?? raw.address ?? "",
     beforePhotos: beforePhotos.length > 0 ? beforePhotos : undefined,
     afterPhotos: afterPhotos.length > 0 ? afterPhotos : undefined,
     customerSignature: customerSignature ?? undefined,
@@ -318,9 +320,10 @@ export class JobService {
    */
   static async updateJobStatus(ticketNo: string, status: TicketStatus): Promise<Ticket> {
     let apiStatus: string = status;
-    if (status === "REACHED") apiStatus = "REACHED_LOCATION";
-    else if (status === "NEW") apiStatus = "NEW_TICKET";
-    else if (status === "CLOSED") apiStatus = "TICKET_CLOSED";
+    const s = status as string;
+    if (s === "REACHED") apiStatus = "REACHED_LOCATION";
+    else if (s === "NEW") apiStatus = "NEW_TICKET";
+    else if (s === "CLOSED") apiStatus = "TICKET_CLOSED";
 
     const res = await apiClient.patch<Ticket>(`${BASE}/tickets/${ticketNo}/status`, { status: apiStatus });
     return res.data;
@@ -464,17 +467,18 @@ export class JobService {
 
   static async collectPayment(
     ticketNo: string,
-    payload: { amount: number; paymentMethod: string }
+    payload: {
+      amount: number;
+      method: string;
+    }
   ): Promise<{ invoiceNo: string; ticketNo: string; amount: number }> {
-    const methodMapped = payload.paymentMethod.toUpperCase() === "CASH" ? "CASH" : "UPI_QR";
+    const methodMapped = payload.method.toUpperCase() === "CASH" ? "CASH" : "UPI_QR";
     const backendPayload = {
       amount: payload.amount,
       method: methodMapped,
     };
-    const res = await apiClient.post<{ invoiceNo: string; ticketNo: string; amount: number }>(
-      `${BASE}/tickets/${ticketNo}/collect-payment`,
-      backendPayload
-    );
+
+    const res = await apiClient.post(`/mobile/technician/tickets/${ticketNo}/collect-payment`, backendPayload);
     return res.data;
   }
 

@@ -161,13 +161,27 @@ export function useCollectPayment() {
   return useMutation({
     mutationFn: ({
       ticketNo,
-      amount,
-      paymentMethod,
+      payload,
     }: {
       ticketNo: string;
-      amount: number;
-      paymentMethod: string;
-    }) => JobService.collectPayment(ticketNo, { amount, paymentMethod }),
+      payload: {
+        amount: number;
+        method: string;
+        baseAmount?: number;
+        platformFee?: number;
+        shippingCharge?: number;
+        handlingCharge?: number;
+        subtotal?: number;
+        gstEnabled?: boolean;
+        gstPercent?: number;
+        gstAmount?: number;
+        discountAmount?: number;
+        totalAmount?: number;
+        collectedAmount?: number;
+        upiId?: string;
+        currency?: string;
+      };
+    }) => JobService.collectPayment(ticketNo, payload),
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.details(vars.ticketNo) });

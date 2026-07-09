@@ -81,6 +81,13 @@ export const AssignedJobsScreen = () => {
   const route = useRoute<RouteProps>();
 
   const [activeTab, setActiveTab] = useState<TabFilter>(route.params?.initialTab || "ALL");
+
+  useEffect(() => {
+    if (route.params?.initialTab) {
+      setActiveTab(route.params.initialTab);
+    }
+  }, [route.params?.initialTab]);
+
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [lockModalVisible, setLockModalVisible] = useState(false);
   const [lockModalMessage, setLockModalMessage] = useState("");
@@ -223,7 +230,7 @@ export const AssignedJobsScreen = () => {
       scheduledTime: inv.generatedAt
         ? new Date(inv.generatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })
         : "",
-      address: "—",
+      address: inv.ticket?.serviceAddress || inv.ticket?.customer?.address || "",
       paymentCollection: Number(inv.total),
       paymentMethod: inv.payment?.method,
       scheduledDateRaw: inv.generatedAt ? inv.generatedAt.substring(0, 10) : "",
@@ -240,13 +247,13 @@ export const AssignedJobsScreen = () => {
     let tabFiltered = list;
     switch (activeTab) {
       case "ASSIGNED":
-        tabFiltered = list.filter((j) => j.status === "ASSIGNED" || j.status === "NEW");
+        tabFiltered = list.filter((j) => j.status === "ASSIGNED" || j.status === "NEW_TICKET");
         break;
       case "ACCEPTED":
         tabFiltered = list.filter((j) => j.status === "ACCEPTED");
         break;
       case "IN_PROGRESS":
-        tabFiltered = list.filter((j) => j.status === "IN_PROGRESS" || j.status === "TRAVELLING" || j.status === "REACHED");
+        tabFiltered = list.filter((j) => j.status === "IN_PROGRESS" || j.status === "TRAVELLING" || j.status === "REACHED_LOCATION");
         break;
       case "PENDING":
         tabFiltered = list.filter((j) => j.status === "PENDING" || j.status === "RESCHEDULED");
@@ -297,14 +304,13 @@ export const AssignedJobsScreen = () => {
     };
 
     return (
-      <Pressable
-        onPress={handlePress}
-        style={({ pressed }) => [
+      <View
+        style={[
           styles.cardContainer,
           {
             backgroundColor: theme.colors.card,
             borderColor: theme.colors.borderLight,
-            opacity: isLocked ? 0.6 : (pressed ? 0.92 : 1),
+            opacity: isLocked ? 0.6 : 1,
           },
         ]}
       >
@@ -402,8 +408,11 @@ export const AssignedJobsScreen = () => {
             <>
               <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
               <Pressable
-                onPress={() => navigation.navigate("TechnicianJobDetails", { jobId: item.id })}
-                style={styles.actionBtnRow}
+                onPress={handlePress}
+                style={({ pressed }) => [
+                  styles.actionBtnRow,
+                  pressed && { opacity: 0.7 }
+                ]}
               >
                 <Text style={[styles.actionLabelText, { color: theme.colors.primary }]}>
                   {action}
@@ -413,7 +422,7 @@ export const AssignedJobsScreen = () => {
             </>
           ) : null}
         </View>
-      </Pressable>
+      </View>
     );
   };
 
@@ -611,9 +620,9 @@ export const AssignedJobsScreen = () => {
         title="Ticket Locked"
         message={lockModalMessage}
         confirmText="Close"
-        confirmVariant="warning"
+        confirmVariant="warning" 
         showCancel={false}
-        onConfirm={() => setLockModalVisible(false)}
+        onConfirm={() =>   setLockModalVisible(false)}
         onCancel={() => setLockModalVisible(false)}
       />
     </View>

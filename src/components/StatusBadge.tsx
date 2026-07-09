@@ -86,7 +86,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, paymentCollect
   let bgColor = "#F1F5F9";
 
   switch (status) {
-    case "NEW":
+    case "NEW_TICKET":
       Icon = Ticket;
       color = "#64748B";
       bgColor = "#F1F5F9";
@@ -106,7 +106,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, paymentCollect
       color = "#EA580C";
       bgColor = "#FFF7ED";
       break;
-    case "REACHED":
+    case "REACHED_LOCATION":
       Icon = MapPin;
       color = "#3B82F6";
       bgColor = "#EFF6FF";
@@ -131,7 +131,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, paymentCollect
       color = "#FFFFFF";
       bgColor = "#16A34A"; // Solid green background
       break;
-    case "CLOSED":
+    case "TICKET_CLOSED":
       Icon = Check;
       color = "#FFFFFF";
       bgColor = "#475569"; // Solid slate gray background
@@ -147,7 +147,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, paymentCollect
         Icon = Ban;
         color = "#DC2626";
         bgColor = "#FEF2F2";
-      } else if (status === "REJECTED") {
+      } else if ((status as string) === "REJECTED") {
         Icon = ThumbsDown;
         color = "#DC2626";
         bgColor = "#FEF2F2";

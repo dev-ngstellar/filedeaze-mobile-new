@@ -153,7 +153,7 @@ export const TechnicianHomeScreen = () => {
   // 1. Ongoing tickets: active tickets scheduled for today (or earlier, since they are still active)
   const ongoing = jobsList.filter(
     (j) =>
-      !["COMPLETED", "CLOSED", "CANCELLED", "INVOICE_GENERATED"].includes(j.status as string) &&
+      !["COMPLETED", "TICKET_CLOSED", "CANCELLED", "INVOICE_GENERATED"].includes(j.status as string) &&
       (!j.scheduledDateRaw || j.scheduledDateRaw <= todayStr)
   );
 
@@ -167,7 +167,7 @@ export const TechnicianHomeScreen = () => {
     id: inv.ticketId,
     ticketNo: inv.ticket?.ticketNumber || inv.invoiceNumber,
     service: `Invoice: #${inv.invoiceNumber}`,
-    status: "CLOSED" as TicketStatus,
+    status: "TICKET_CLOSED" as TicketStatus,
     customerName: inv.ticket?.customer?.name || "Client",
     customerMobile: "",
     description: `Payment Mode: ${inv.payment?.method || "N/A"}\nTotal Collected: ₹${inv.total}`,
@@ -194,9 +194,9 @@ export const TechnicianHomeScreen = () => {
       [...ongoing, ...paymentPending, ...completedTickets, ...upcoming].map((item) => [item.id, item])
     ).values()
   );
-  const assignedCount = jobsList.filter((j) => j.status === "ASSIGNED" || j.status === "NEW").length;
+  const assignedCount = jobsList.filter((j) => j.status === "ASSIGNED" || j.status === "NEW_TICKET").length;
   const inProgressCount = jobsList.filter(
-    (j) => j.status === "IN_PROGRESS" || j.status === "ACCEPTED" || j.status === "TRAVELLING" || j.status === "REACHED"
+    (j) => j.status === "IN_PROGRESS" || j.status === "ACCEPTED" || j.status === "TRAVELLING" || j.status === "REACHED_LOCATION"
   ).length;
   const pendingCount = jobsList.filter((j) => j.status === "PENDING" || j.status === "RESCHEDULED").length;
   const completedCount = invoices.length;
@@ -296,12 +296,12 @@ export const TechnicianHomeScreen = () => {
   const getStatusVariant = (status: string) => {
     switch (status) {
       case "COMPLETED":
-      case "CLOSED":
+      case "TICKET_CLOSED":
         return "success";
       case "IN_PROGRESS":
       case "ACCEPTED":
       case "TRAVELLING":
-      case "REACHED":
+      case "REACHED_LOCATION":
         return "warning";
       case "PENDING":
       case "RESCHEDULED":
@@ -394,7 +394,7 @@ export const TechnicianHomeScreen = () => {
 
           <View style={[styles.heroJobBadge, { backgroundColor: "rgba(255,255,255,0.18)" }]}>
             <Text style={styles.heroJobNum}>{assignedCount + inProgressCount + pendingCount}</Text>
-            <Text style={styles.heroJobLabel}>Pending</Text>
+            <Text style={styles.heroJobLabel}>Assigned</Text>
           </View>
         </View>
       </View>

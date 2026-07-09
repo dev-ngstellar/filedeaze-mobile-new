@@ -11,6 +11,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -208,6 +209,8 @@ export const RaiseTicketScreen = () => {
   // Dropdown UI states
   const [catModalVisible, setCatModalVisible] = useState(false);
   const [subModalVisible, setSubModalVisible] = useState(false);
+  const subFieldRef = React.useRef<View>(null);
+  const [subDropdownLayout, setSubDropdownLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
   // Search states for category/sub-category pickers
   const [catSearch, setCatSearch] = useState("");
@@ -230,7 +233,7 @@ export const RaiseTicketScreen = () => {
   const [popupType, setPopupType] = useState<"info" | "success" | "warning" | "danger">("info");
   const [popupTitle, setPopupTitle] = useState("");
   const [popupMessage, setPopupMessage] = useState("");
-  const [popupAction, setPopupAction] = useState<() => void>(() => {});
+  const [popupAction, setPopupAction] = useState<() => void>(() => { });
 
   // Success countdown states
   const [successVisible, setSuccessVisible] = useState(false);
@@ -292,6 +295,22 @@ export const RaiseTicketScreen = () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+
+  const formatDateKey = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const todayKey = formatDateKey(new Date());
+
+  const isDateAllowed = (date: Date) => {
+    return formatDateKey(date) > todayKey;
+  };
+
   const handlePrevMonth = () => {
     setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
   };
@@ -349,19 +368,8 @@ export const RaiseTicketScreen = () => {
     if (!preferredDate || !preferredTimeSlot) {
       newErrors.preferredDate = "Visit Date and Time slot are required";
     } else {
-      const isToday = preferredDate.toDateString() === new Date().toDateString();
-      if (isToday) {
-        const [timePart] = preferredTimeSlot.split(" - ");
-        const [hhmm, ampm] = timePart.split(" ");
-        let [hours, minutes] = hhmm.split(":").map(Number);
-        if (ampm === "PM" && hours !== 12) hours += 12;
-        if (ampm === "AM" && hours === 12) hours = 0;
-        const now = new Date();
-        const selectedTimeVal = hours * 60 + minutes;
-        const currentTimeVal = now.getHours() * 60 + now.getMinutes();
-        if (selectedTimeVal < currentTimeVal) {
-          newErrors.preferredDate = "Visit time cannot be in the past";
-        }
+      if (!isDateAllowed(preferredDate)) {
+        newErrors.preferredDate = "Bookings can only be scheduled from tomorrow onwards.";
       }
     }
     if (!address.trim()) newErrors.address = "Address is required";
@@ -555,12 +563,12 @@ export const RaiseTicketScreen = () => {
         images.map(async (item, idx) => {
           let uploadUri = item.uri;
           let filename = item.uri.split("/").pop() ?? `media_${idx}.jpg`;
-          
+
           if (item.type === "image") {
             uploadUri = await compressImage(item.uri);
             filename = `ticket_${Date.now()}_${idx}.jpg`;
           }
-          
+
           const ext = filename.split(".").pop()?.toLowerCase() ?? "jpg";
           let mimeType = "image/jpeg";
           if (item.type === "video") {
@@ -653,14 +661,17 @@ export const RaiseTicketScreen = () => {
             </View>
             <Pressable
               style={[
-                styles.dropdownBtn, 
-                { 
-                  backgroundColor: isCategoryLocked ? `${theme.colors.primary}08` : theme.colors.background, 
-                  borderColor: isCategoryLocked ? `${theme.colors.primary}30` : theme.colors.borderLight 
+                styles.dropdownBtn,
+                {
+                  backgroundColor: isCategoryLocked ? `${theme.colors.primary}08` : theme.colors.background,
+                  borderColor: isCategoryLocked ? `${theme.colors.primary}30` : theme.colors.borderLight
                 }
               ]}
               disabled={isCategoryLocked}
-              onPress={() => setCatModalVisible(true)}
+              onPress={() => {
+                setSubModalVisible(false);
+                setCatModalVisible(true);
+              }}
             >
               <View style={styles.dropdownValueWrapper}>
                 {selectedCat && (
@@ -678,7 +689,7 @@ export const RaiseTicketScreen = () => {
             </Pressable>
             {isCategoryLocked && (
               <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6, marginLeft: 2, gap: 4 }}>
-      
+
               </View>
             )}
             {submitAttempted && errors.category ? (
@@ -686,31 +697,149 @@ export const RaiseTicketScreen = () => {
             ) : null}
           </View>
 
-          {/* Sub Category */}
-          <View style={styles.fieldWrapper}>
+          <View style={[styles.fieldWrapper, { zIndex: 1000 }]}>
             <View style={styles.labelRow}>
               <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Sub Category</Text>
               <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
             </View>
-            <Pressable
-              style={[
-                styles.dropdownBtn,
-                { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight },
-                !selectedCat && { opacity: 0.5 },
-              ]}
-              onPress={() => {
-                if (!selectedCat) {
-                  triggerPopup("info", "Select Category", "Please select a main category first.");
-                  return;
-                }
-                setSubModalVisible(true);
-              }}
-            >
-              <Text style={[styles.dropdownText, { color: selectedSub ? theme.colors.text : theme.colors.textLight }]}>
-                {selectedSub ? selectedSub.name : "Select repair service detail..."}
-              </Text>
-              <ChevronDown size={18} color={theme.colors.textMuted} />
-            </Pressable>
+            <View style={{ position: "relative", zIndex: 1000 }}>
+              <Pressable
+                style={[
+                  styles.dropdownBtn,
+                  { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight },
+                  !selectedCat && { opacity: 0.5 },
+                  subModalVisible && {
+                    borderBottomLeftRadius: 0,
+                    borderBottomRightRadius: 0,
+                    borderBottomWidth: 0,
+                  }
+                ]}
+                onPress={() => {
+                  if (!selectedCat) {
+                    triggerPopup("info", "Select Category", "Please select a main category first.");
+                    return;
+                  }
+                  setSubModalVisible(!subModalVisible);
+                }}
+              >
+                <Text style={[styles.dropdownText, { color: selectedSub ? theme.colors.text : theme.colors.textLight }]}>
+                  {selectedSub ? selectedSub.name : "Select repair service detail..."}
+                </Text>
+                <ChevronDown size={18} color={theme.colors.textMuted} />
+              </Pressable>
+
+              {/* Sub Category Picker Dropdown Overlay */}
+              {subModalVisible && (
+                <View
+                  style={{
+                    position: "relative",
+                    backgroundColor: theme.colors.card,
+                    borderColor: theme.colors.borderLight,
+                    borderWidth: 1.5,
+                    borderTopWidth: 1,
+                    borderTopLeftRadius: 0,
+                    borderTopRightRadius: 0,
+                    borderBottomLeftRadius: 16,
+                    borderBottomRightRadius: 16,
+                    maxHeight: 300,
+                    padding: 10,
+                    overflow: "hidden",
+                    width: "100%",
+                    marginTop: -1,
+                  }}
+                >
+                  <View style={[styles.pickerSearchBar, { backgroundColor: `${theme.colors.textMuted}08`, borderColor: theme.colors.borderLight, marginHorizontal: 0, marginBottom: 8, height: 40 }]}>
+                    <Wrench size={14} color={theme.colors.textMuted} />
+                    <TextInput
+                      style={[styles.pickerSearchInput, { color: theme.colors.text, fontSize: 13 }]}
+                      placeholder="Search services..."
+                      placeholderTextColor={theme.colors.textMuted}
+                      value={subSearch}
+                      onChangeText={setSubSearch}
+                      autoCorrect={false}
+                    />
+                    {subSearch.length > 0 && (
+                      <Pressable onPress={() => setSubSearch("")}>
+                        <X size={14} color={theme.colors.textMuted} />
+                      </Pressable>
+                    )}
+                  </View>
+
+                  {isLoadingSubs ? (
+                    <AppLoader message="Retrieving service details..." />
+                  ) : (
+                    <ScrollView
+                      showsVerticalScrollIndicator={true}
+                      keyboardShouldPersistTaps="handled"
+                      style={{ maxHeight: 220 }}
+                      nestedScrollEnabled={true}
+                    >
+                      {(() => {
+                        const filtered = subCategories.filter((s: any) =>
+                          s.name.toLowerCase().includes(subSearch.toLowerCase())
+                        );
+                        if (filtered.length === 0) {
+                          return (
+                            <View style={{ alignItems: "center", paddingVertical: 20 }}>
+                              <Text style={{ color: theme.colors.textMuted, fontSize: 12 }}>No services found</Text>
+                            </View>
+                          );
+                        }
+                        return filtered.map((item: any, index: number) => {
+                          const isActive = selectedSub?.id === item.id;
+                          return (
+                            <Pressable
+                              key={item.id}
+                              style={[
+                                styles.subListItem,
+                                {
+                                  backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background,
+                                  marginVertical: 3,
+                                  padding: 10,
+                                  minHeight: 54,
+                                },
+                                isActive
+                                  ? { borderColor: theme.colors.primary, borderWidth: 1.5 }
+                                  : { borderColor: theme.colors.borderLight, borderWidth: 1 },
+                              ]}
+                              onPress={() => {
+                                setSelectedSub(item);
+                                setSubModalVisible(false);
+                                setSubSearch("");
+                                if (errors.subCategory) setErrors((prev) => ({ ...prev, subCategory: "" }));
+                              }}
+                            >
+                              <View style={[styles.subItemNumBadge, { backgroundColor: isActive ? theme.colors.primary : `${theme.colors.textMuted}10`, width: 22, height: 22, borderRadius: 11 }]}>
+                                <Text style={[styles.subItemNumText, { color: isActive ? "#fff" : theme.colors.textMuted, fontSize: 10 }]}>
+                                  {String(index + 1).padStart(2, "0")}
+                                </Text>
+                              </View>
+
+                              <View style={{ flex: 1, marginLeft: 8 }}>
+                                <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text, fontSize: 12 }]}>
+                                  {item.name}
+                                </Text>
+                                {item.serviceCharges?.length > 0 && (
+                                  <Text style={[styles.subItemCharge, { color: theme.colors.textMuted, fontSize: 10 }]}>
+                                    ₹{item.serviceCharges[0].amount} base charge
+                                  </Text>
+                                )}
+                              </View>
+
+                              {isActive && (
+                                <View style={[styles.subItemCheckCircle, { backgroundColor: theme.colors.primary, width: 18, height: 18, borderRadius: 9 }]}>
+                                  <Check size={10} color="#fff" />
+                                </View>
+                              )}
+                            </Pressable>
+                          );
+                        });
+                      })()}
+                    </ScrollView>
+                  )}
+                </View>
+              )}
+            </View>
             {submitAttempted && errors.subCategory ? (
               <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.subCategory}</Text>
             ) : null}
@@ -782,6 +911,7 @@ export const RaiseTicketScreen = () => {
               }}
               multiline
               numberOfLines={4}
+              onFocus={() => setSubModalVisible(false)}
             />
             {submitAttempted && errors.description ? (
               <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.description}</Text>
@@ -808,7 +938,8 @@ export const RaiseTicketScreen = () => {
               <Pressable
                 style={[styles.dropdownBtn, { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight }]}
                 onPress={() => {
-                  setTempDate(preferredDate || new Date());
+                  setSubModalVisible(false);
+                  setTempDate(preferredDate);
                   setDateModalVisible(true);
                 }}
               >
@@ -832,6 +963,7 @@ export const RaiseTicketScreen = () => {
               <Pressable
                 style={[styles.dropdownBtn, { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight }]}
                 onPress={() => {
+                  setSubModalVisible(false);
                   if (preferredTimeSlot) {
                     // Parse existing HH:MM AM/PM format
                     const parts = preferredTimeSlot.split(" ");
@@ -892,10 +1024,14 @@ export const RaiseTicketScreen = () => {
               }}
               multiline
               numberOfLines={3}
+              onFocus={() => setSubModalVisible(false)}
             />
             <Pressable
               style={[styles.addressBookBtnFull, { backgroundColor: `${theme.colors.primary}08`, borderColor: `${theme.colors.primary}40` }]}
-              onPress={handleOpenAddressBook}
+              onPress={() => {
+                setSubModalVisible(false);
+                handleOpenAddressBook();
+              }}
             >
               <MapPin size={16} color={theme.colors.primary} />
               <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: "700", marginLeft: 8 }}>
@@ -980,6 +1116,7 @@ export const RaiseTicketScreen = () => {
               placeholder="e.g. Model number sticker / leak spot near the pipe joint"
               value={imageNotes}
               onChangeText={setImageNotes}
+              onFocus={() => setSubModalVisible(false)}
             />
           </View>
         </AppCard>
@@ -1155,122 +1292,7 @@ export const RaiseTicketScreen = () => {
         </View>
       </Modal>
 
-      {/* ── Sub Category Picker Modal (Premium List) ── */}
-      <Modal
-        visible={subModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => { setSubModalVisible(false); setSubSearch(""); }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.card }]}>
-            <View style={styles.dragHandle} />
-
-            {/* Header */}
-            <View style={styles.pickerHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.pickerTitle, { color: theme.colors.text }]}>Service Detail</Text>
-                {selectedCat && (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
-                    <View style={[styles.subHeaderCatDot, { backgroundColor: theme.colors.primary }]} />
-                    <Text style={[styles.pickerSubtitle, { color: theme.colors.primary }]}>{selectedCat.name}</Text>
-                  </View>
-                )}
-              </View>
-              <Pressable
-                style={[styles.pickerCloseBtn, { backgroundColor: `${theme.colors.textMuted}12` }]}
-                onPress={() => { setSubModalVisible(false); setSubSearch(""); }}
-              >
-                <X size={16} color={theme.colors.textMuted} />
-              </Pressable>
-            </View>
-
-            {/* Search bar */}
-            <View style={[styles.pickerSearchBar, { backgroundColor: `${theme.colors.textMuted}08`, borderColor: theme.colors.borderLight }]}>
-              <Wrench size={15} color={theme.colors.textMuted} />
-              <TextInput
-                style={[styles.pickerSearchInput, { color: theme.colors.text }]}
-                placeholder="Search services..."
-                placeholderTextColor={theme.colors.textMuted}
-                value={subSearch}
-                onChangeText={setSubSearch}
-                autoCorrect={false}
-              />
-              {subSearch.length > 0 && (
-                <Pressable onPress={() => setSubSearch("")}>
-                  <X size={14} color={theme.colors.textMuted} />
-                </Pressable>
-              )}
-            </View>
-
-            {isLoadingSubs ? (
-              <AppLoader message="Retrieving service details..." />
-            ) : (
-              <FlatList
-                data={subCategories.filter((s: any) =>
-                  s.name.toLowerCase().includes(subSearch.toLowerCase())
-                )}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={styles.subList}
-                showsVerticalScrollIndicator={false}
-                ListEmptyComponent={
-                  <View style={{ alignItems: "center", paddingVertical: 40 }}>
-                    <Text style={{ color: theme.colors.textMuted, fontSize: 13 }}>No services found</Text>
-                  </View>
-                }
-                renderItem={({ item, index }) => {
-                  const isActive = selectedSub?.id === item.id;
-                  return (
-                    <Pressable
-                      style={[
-                        styles.subListItem,
-                        { backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background },
-                        isActive
-                          ? { borderColor: theme.colors.primary, borderWidth: 2 }
-                          : { borderColor: theme.colors.borderLight, borderWidth: 1.5 },
-                      ]}
-                      onPress={() => {
-                        setSelectedSub(item);
-                        setSubModalVisible(false);
-                        setSubSearch("");
-                        if (errors.subCategory) setErrors((prev) => ({ ...prev, subCategory: "" }));
-                      }}
-                    >
-                      {/* Left number badge */}
-                      <View style={[styles.subItemNumBadge, { backgroundColor: isActive ? theme.colors.primary : `${theme.colors.textMuted}10` }]}>
-                        <Text style={[styles.subItemNumText, { color: isActive ? "#fff" : theme.colors.textMuted }]}>
-                          {String(index + 1).padStart(2, "0")}
-                        </Text>
-                      </View>
-
-                      {/* Name + charge */}
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text }]}>
-                          {item.name}
-                        </Text>
-                        {item.serviceCharges?.length > 0 && (
-                          <Text style={[styles.subItemCharge, { color: theme.colors.textMuted }]}>
-                            ₹{item.serviceCharges[0].amount} base charge
-                          </Text>
-                        )}
-                      </View>
-
-                      {/* Right check */}
-                      {isActive && (
-                        <View style={[styles.subItemCheckCircle, { backgroundColor: theme.colors.primary }]}>
-                          <Check size={13} color="#fff" />
-                        </View>
-                      )}
-                    </Pressable>
-                  );
-                }}
-              />
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Custom Date Picker Modal */}
+{/* Custom Date Picker Modal */}
       <Modal visible={dateModalVisible} transparent animationType="slide" onRequestClose={() => setDateModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: theme.colors.card, paddingBottom: 24 }]}>
@@ -1311,22 +1333,29 @@ export const RaiseTicketScreen = () => {
                     return <View key={`empty-${idx}`} style={styles.dayCellEmpty} />;
                   }
 
-                  const isPast = dateVal.getTime() < today.getTime();
-                  const isSelected = tempDate?.toDateString() === dateVal.toDateString();
-                  const isToday = dateVal.toDateString() === today.toDateString();
+                  const isPastOrToday = !isDateAllowed(dateVal);
+                  const isToday = formatDateKey(dateVal) === todayKey;
+                  const isSelected = tempDate && isDateAllowed(dateVal) && formatDateKey(dateVal) === formatDateKey(tempDate);
+                  const hasValidSelection = tempDate && isDateAllowed(tempDate);
 
                   return (
                     <Pressable
                       key={`day-${idx}`}
-                      disabled={isPast && !isToday}
                       onPress={() => {
-                        if (!isPast || isToday) setTempDate(dateVal);
+                        if (!isDateAllowed(dateVal)) {
+                          Alert.alert(
+                            "Invalid Date",
+                            "Bookings can only be scheduled from tomorrow onwards."
+                          );
+                          return;
+                        }
+                        setTempDate(dateVal);
                       }}
                       style={[
                         styles.dayCell,
                         isSelected && { backgroundColor: theme.colors.primary, borderRadius: 100 },
-                        !isSelected && isToday && { borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 100 },
-                        isPast && !isToday && { opacity: 0.3 },
+                        !isSelected && isToday && !hasValidSelection && { borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 100 },
+                        isPastOrToday && { opacity: 0.3 },
                       ]}
                     >
                       <Text
@@ -1334,7 +1363,7 @@ export const RaiseTicketScreen = () => {
                           styles.dayText,
                           { color: theme.colors.text },
                           isSelected && { color: "#ffffff", fontWeight: "700" },
-                          !isSelected && isToday && { color: theme.colors.primary, fontWeight: "700" },
+                          !isSelected && isToday && !hasValidSelection && { color: theme.colors.primary, fontWeight: "700" },
                         ]}
                       >
                         {dateVal.getDate()}
@@ -1344,6 +1373,12 @@ export const RaiseTicketScreen = () => {
                 })}
               </View>
 
+              {tempDate && !isDateAllowed(tempDate) ? (
+                <Text style={{ color: theme.colors.danger, fontSize: 13, textAlign: "center", marginVertical: 10, fontWeight: "600" }}>
+                  Bookings can only be scheduled from tomorrow onwards.
+                </Text>
+              ) : null}
+
               {/* Action Buttons */}
               <View style={styles.modalActionRow}>
                 <Pressable
@@ -1352,33 +1387,35 @@ export const RaiseTicketScreen = () => {
                 >
                   <Text style={[styles.modalActionBtnTextCancel, { color: theme.colors.textMuted }]}>Cancel</Text>
                 </Pressable>
-                <Pressable
-                  style={[styles.modalActionBtn, styles.modalActionBtnOk, { backgroundColor: theme.colors.primary }]}
-                  onPress={() => {
-                    if (tempDate) {
-                      const isToday = tempDate.toDateString() === new Date().toDateString();
-                      if (isToday && preferredTimeSlot) {
-                        const [timePart] = preferredTimeSlot.split(" - ");
-                        const [hhmm, ampm] = timePart.split(" ");
-                        let [hours, minutes] = hhmm.split(":").map(Number);
-                        if (ampm === "PM" && hours !== 12) hours += 12;
-                        if (ampm === "AM" && hours === 12) hours = 0;
-                        const now = new Date();
-                        const selectedTimeVal = hours * 60 + minutes;
-                        const currentTimeVal = now.getHours() * 60 + now.getMinutes();
-                        if (selectedTimeVal < currentTimeVal) {
-                          setPreferredTimeSlot("");
-                          triggerPopup("warning", "Time Cleared", "The previously selected time is in the past for today. Please select a future time.");
+                {tempDate && isDateAllowed(tempDate) ? (
+                  <Pressable
+                    style={[styles.modalActionBtn, styles.modalActionBtnOk, { backgroundColor: theme.colors.primary }]}
+                    onPress={() => {
+                      if (tempDate) {
+                        const isToday = formatDateKey(tempDate) === todayKey;
+                        if (isToday && preferredTimeSlot) {
+                          const [timePart] = preferredTimeSlot.split(" - ");
+                          const [hhmm, ampm] = timePart.split(" ");
+                          let [hours, minutes] = hhmm.split(":").map(Number);
+                          if (ampm === "PM" && hours !== 12) hours += 12;
+                          if (ampm === "AM" && hours === 12) hours = 0;
+                          const now = new Date();
+                          const selectedTimeVal = hours * 60 + minutes;
+                          const currentTimeVal = now.getHours() * 60 + now.getMinutes();
+                          if (selectedTimeVal < currentTimeVal) {
+                            setPreferredTimeSlot("");
+                            triggerPopup("warning", "Time Cleared", "The previously selected time is in the past for today. Please select a future time.");
+                          }
                         }
+                        setPreferredDate(tempDate);
+                        if (errors.preferredDate) setErrors((prev) => ({ ...prev, preferredDate: "" }));
                       }
-                      setPreferredDate(tempDate);
-                      if (errors.preferredDate) setErrors((prev) => ({ ...prev, preferredDate: "" }));
-                    }
-                    setDateModalVisible(false);
-                  }}
-                >
-                  <Text style={[styles.modalActionBtnTextOk, { color: "#ffffff" }]}>OK</Text>
-                </Pressable>
+                      setDateModalVisible(false);
+                    }}
+                  >
+                    <Text style={[styles.modalActionBtnTextOk, { color: "#ffffff" }]}>OK</Text>
+                  </Pressable>
+                ) : null}
               </View>
             </View>
           </View>
@@ -1441,7 +1478,7 @@ export const RaiseTicketScreen = () => {
                   style={[styles.modalActionBtn, styles.modalActionBtnOk, { backgroundColor: theme.colors.primary }]}
                   onPress={() => {
                     const formatted = `${tempHour.toString().padStart(2, "0")}:${tempMin.toString().padStart(2, "0")} ${tempPeriod}`;
-                    
+
                     const checkDate = preferredDate || new Date();
                     const isToday = checkDate.toDateString() === new Date().toDateString();
                     if (isToday) {
@@ -1449,10 +1486,10 @@ export const RaiseTicketScreen = () => {
                       let selectedHours = tempHour;
                       if (tempPeriod === "PM" && selectedHours !== 12) selectedHours += 12;
                       if (tempPeriod === "AM" && selectedHours === 12) selectedHours = 0;
-                      
+
                       const selectedTimeVal = selectedHours * 60 + tempMin;
                       const currentTimeVal = now.getHours() * 60 + now.getMinutes();
-                      
+
                       if (selectedTimeVal < currentTimeVal) {
                         triggerPopup("danger", "Invalid Time", "You cannot select a preferred visit time in the past.");
                         return;

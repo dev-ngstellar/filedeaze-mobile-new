@@ -1,5 +1,4 @@
-// Refreshed to clear IDE diagnostics
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -13,9 +12,12 @@ import {
   TextInput,
   Image,
   Switch,
+  Modal,
+  PanResponder,
 } from "react-native";
-import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
+import { useRoute, useNavigation, RouteProp, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import Svg, { Path } from "react-native-svg";
 import {
   Phone,
   MapPin,
@@ -38,14 +40,22 @@ import {
   Smartphone,
   Play,
   Receipt,
+  PenLine,
+  Trash2,
+  ImagePlus,
+  ShieldCheck,
+  CheckCircle,
 } from "lucide-react-native";
 import QRCode from "react-native-qrcode-svg";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useTheme } from "../../theme";
+import { apiClient } from "../../api/client";
 import { TechnicianStackParamList } from "../../types/navigation.types";
-import { TicketStatus } from "../../services/job.service";
+import { TicketStatus, JobService } from "../../services/job.service";
+import { PaymentService, PlatformCharges, MobilePaymentConfig } from "../../services/payment.service";
 import {
   useJobDetails,
   useUpdateJobStatus,
@@ -57,6 +67,7 @@ import {
   useUploadTicketImage,
   useTechnicianJobs,
   useAttendanceStatus,
+  useSaveBeforePhotos,
 } from "../../hooks/useJobs";
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
@@ -66,6 +77,7 @@ import { AppButton } from "../../components/AppButton";
 import { AppInput } from "../../components/AppInput";
 import { AppConfirmModal } from "../../components/AppConfirmModal";
 import { AppSuccessModal } from "../../components/AppSuccessModal";
+import { PaymentBreakdownCard } from "../../components/PaymentBreakdownCard";
 
 type RouteProps = RouteProp<TechnicianStackParamList, "TechnicianJobDetails">;
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "TechnicianJobDetails">;
@@ -79,10 +91,11 @@ const QUICK_REASONS = [
 ];
 
 const PENDING_REASONS = [
-  "Customer Not Available",
   "Spare Parts Required",
-  "Additional Visit Required",
-  "Technical Issue",
+  "Waiting for Customer Approval",
+  "Complex Issue — Needs Expert/Team",
+  "Site Outage (Power/Water/Utility)",
+  "Customer Requested Delay",
 ];
 
 export const TechnicianJobDetailsScreen = () => {
@@ -90,6 +103,8 @@ export const TechnicianJobDetailsScreen = () => {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
   const { jobId } = route.params;
+  const queryClient = useQueryClient();
+  const [shouldNavigateHome, setShouldNavigateHome] = useState(false);
 
   const { data: job, isLoading, refetch } = useJobDetails(jobId);
   const { data: attendance } = useAttendanceStatus();
@@ -101,6 +116,7 @@ export const TechnicianJobDetailsScreen = () => {
   const rejectJobMutation = useRejectJob();
   const collectPaymentMutation = useCollectPayment();
   const uploadImageMutation = useUploadTicketImage();
+  const savePhotosMutation = useSaveBeforePhotos();
   const isCheckedIn = !!attendance?.checkedIn;
 
   const isVideoUrl = (url: string) => {
@@ -139,18 +155,135 @@ export const TechnicianJobDetailsScreen = () => {
   const [pendingFormVisible, setPendingFormVisible] = useState(false);
   const [selectedPendingReason, setSelectedPendingReason] = useState("");
   const [pendingNotes, setPendingNotes] = useState("");
+  const [pendingPhotos, setPendingPhotos] = useState<string[]>([]);
 
   // Reschedule Form State
   const [rescheduleVisible, setRescheduleVisible] = useState(false);
   const [nextVisitDate, setNextVisitDate] = useState("");
 
-  // Complete Form State
+  // Start Job State
+  const [startJobFormVisible, setStartJobFormVisible] = useState(false);
+  const [beforePhotos, setBeforePhotos] = useState<string[]>([]);
+  const [earlyStartModalVisible, setEarlyStartModalVisible] = useState(false);
+
+  // Reach Location Form State
+  const [reachFormVisible, setReachFormVisible] = useState(false);
+  const [locationName, setLocationName] = useState<string | null>(null);
+
+  // Complete Form State (Multi-step Wizard)
   const [completeFormVisible, setCompleteFormVisible] = useState(false);
+  const [completeStep, setCompleteStep] = useState(1);
   const [workNotes, setWorkNotes] = useState("");
   const [duration, setDuration] = useState("1.5 Hours");
+  const [afterPhotos, setAfterPhotos] = useState<string[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [liveDuration, setLiveDuration] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
 
+  // Complete Signature state
+  type Point = { x: number; y: number };
+  type Stroke = Point[];
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [currentStroke, setCurrentStroke] = useState<Stroke>([]);
+  const currentStrokeRef = useRef<Stroke>([]);
+  const [remarks, setRemarks] = useState("");
+  const [hasSigned, setHasSigned] = useState(false);
+
+  // Complete Payment Collection state
+  const [paymentMode, setPaymentMode] = useState<"CASH" | "UPI">("CASH");
+  const [amountStr, setAmountStr] = useState("");
+  const [extraCharges, setExtraCharges] = useState<{ id: string; name: string; amountStr: string }[]>([]);
+  const [transactionId, setTransactionId] = useState("");
+  const [transactionIdError, setTransactionIdError] = useState("");
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const [generatedInvoiceNo, setGeneratedInvoiceNo] = useState("");
+  // Fetch platform charges and mobile payment config (Only when modal is open)
+  const { data: platformCharges } = useQuery({
+    queryKey: ["platformCharges"],
+    queryFn: PaymentService.getPlatformCharges,
+    enabled: completeFormVisible,
+  });
+
+  const { data: paymentConfig } = useQuery({
+    queryKey: ["mobilePaymentConfig"],
+    queryFn: PaymentService.getMobilePaymentConfig,
+    enabled: completeFormVisible,
+  });
+
+  useEffect(() => {
+    if (paymentConfig && !paymentConfig.upiEnabled) {
+      setPaymentMode("CASH");
+    }
+  }, [paymentConfig]);
+
+  // CALCULATION LOGIC
+  const base = (!amountStr || isNaN(parseFloat(amountStr)) || parseFloat(amountStr) <= 0) ? 0 : parseFloat(amountStr);
+  const extraChargesSum = extraCharges.reduce((sum, item) => {
+    const name = item.name.trim();
+    const val = parseFloat(item.amountStr);
+    if (name !== "" && !isNaN(val) && val > 0) {
+      return sum + val;
+    }
+    return sum;
+  }, 0);
+
+  const baseAmount = base + extraChargesSum;
+
+  const platformFee = Number(platformCharges?.platformFee || 0);
+
+  const shippingCharge = platformCharges?.shippingEnabled
+    ? Number(platformCharges?.shippingCharge || 0)
+    : 0;
+
+  const handlingCharge = platformCharges?.handlingEnabled
+    ? Number(platformCharges?.handlingCharge || 0)
+    : 0;
+
+  const subtotal = baseAmount + platformFee + shippingCharge + handlingCharge;
+
+  const gstEnabled = !!paymentConfig?.gstEnabled;
+  const gstPercent = gstEnabled
+    ? Number(paymentConfig?.gstPercent || 0)
+    : 0;
+
+  const gstAmount = gstEnabled ? (subtotal * gstPercent / 100) : 0;
+
+  const discountAmount =
+    (platformCharges?.dailyDiscountEnabled ? Number(platformCharges?.dailyDiscount || 0) : 0) +
+    (platformCharges?.weeklyDiscountEnabled ? Number(platformCharges?.weeklyDiscount || 0) : 0) +
+    (platformCharges?.monthlyDiscountEnabled ? Number(platformCharges?.monthlyDiscount || 0) : 0);
+
+  const totalAmount = subtotal + gstAmount - discountAmount;
+  const amount = Math.max(0, Math.round(totalAmount * 100) / 100);
+
+  const currencySymbol = paymentConfig?.currency === "INR" ? "₹" : (paymentConfig?.currency || "₹");
+
+  // Reached Location GPS State
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>({ lat: 28.6139, lng: 77.2090 });
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+
+  // Navigation Route Param Trigger Modals
+  useEffect(() => {
+    if (route.params?.openCompleteJob) {
+      setCompleteFormVisible(true);
+      navigation.setParams({ openCompleteJob: undefined } as any);
+    }
+    if (route.params?.openMarkPending) {
+      setPendingFormVisible(true);
+      navigation.setParams({ openMarkPending: undefined } as any);
+    }
+  }, [route.params]);
+
+  // Refetch job details whenever screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      refetch();
+    }, [refetch])
+  );
+
+  // Live Timer for In Progress Jobs
   useEffect(() => {
     if (job?.status !== "IN_PROGRESS") {
       setLiveDuration("");
@@ -162,12 +295,10 @@ export const TechnicianJobDetailsScreen = () => {
     }
 
     const inProgressLog = job.statusLogs?.find((log: any) => log.status === "IN_PROGRESS");
-    if (!inProgressLog) return;
-
-    const startTime = new Date(inProgressLog.changedAt).getTime();
+    const startTime = inProgressLog ? new Date(inProgressLog.changedAt).getTime() : Date.now();
 
     const updateTimer = () => {
-      const now = new Date().getTime();
+      const now = Date.now();
       const diffMs = now - startTime;
       if (diffMs <= 0) {
         setLiveDuration("00:00:00");
@@ -194,27 +325,27 @@ export const TechnicianJobDetailsScreen = () => {
     }
   }, [completeFormVisible]);
 
-  // Payment Form State
-  const [paymentFormVisible, setPaymentFormVisible] = useState(false);
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("CASH");
-  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
-
-  // Reached Location GPS State
-  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [gpsLoading, setGpsLoading] = useState(false);
-  const [gpsError, setGpsError] = useState<string | null>(null);
-
-  // Auto-fetch GPS onTravelling status mount
+  // Auto-populate price when job data loads
   useEffect(() => {
-    if (job?.status === "TRAVELLING") {
+    if (job && !amountStr) {
+      const defaultAmount = job.serviceCharge ?? job.categoryPrice ?? 0;
+      if (defaultAmount > 0) {
+        setAmountStr(String(defaultAmount));
+      }
+    }
+  }, [job, amountStr]);
+
+  // Auto-fetch GPS on REACHED status or similar
+  useEffect(() => {
+    if (job?.status === "ACCEPTED" || job?.status === "REACHED_LOCATION" || completeFormVisible) {
       fetchGPS();
     }
-  }, [job?.status]);
+  }, [job?.status, completeFormVisible]);
 
   const fetchGPS = async () => {
     setGpsLoading(true);
     setGpsError(null);
+    setLocationName(null);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
@@ -225,13 +356,38 @@ export const TechnicianJobDetailsScreen = () => {
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      setGpsCoords({
+      const coords = {
         lat: parseFloat(loc.coords.latitude.toFixed(6)),
         lng: parseFloat(loc.coords.longitude.toFixed(6)),
-      });
+      };
+      setGpsCoords(coords);
+      try {
+        const geocode = await Location.reverseGeocodeAsync({
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        });
+        if (geocode && geocode.length > 0) {
+          const item = geocode[0];
+          const parts = [
+            item.name,
+            item.street,
+            item.district,
+            item.city,
+            item.region,
+            item.postalCode,
+            item.country,
+          ].filter(Boolean);
+          setLocationName(parts.join(", "));
+        } else {
+          setLocationName(`${coords.lat}, ${coords.lng}`);
+        }
+      } catch {
+        setLocationName(`${coords.lat}, ${coords.lng}`);
+      }
     } catch (e) {
       setGpsError("Could not fetch GPS. Using fallback coordinates.");
       setGpsCoords({ lat: 28.6139, lng: 77.2090 });
+      setLocationName("New Delhi, Delhi, India");
     } finally {
       setGpsLoading(false);
     }
@@ -241,7 +397,7 @@ export const TechnicianJobDetailsScreen = () => {
     if (status === "ACCEPTED") {
       // 1. Check if the technician already has another active job
       const hasActiveJob = Array.isArray(allJobs) && allJobs.some(
-        (j) => j.id !== jobId && ["ACCEPTED", "TRAVELLING", "REACHED", "IN_PROGRESS", "RESCHEDULED", "INVOICE_GENERATED", "COMPLETED"].includes(j.status)
+        (j) => j.id !== jobId && ["ACCEPTED", "TRAVELLING", "REACHED_LOCATION", "IN_PROGRESS"].includes(j.status)
       );
       if (hasActiveJob) {
         setAlertModalTitle("Active Job Pending");
@@ -267,6 +423,10 @@ export const TechnicianJobDetailsScreen = () => {
 
     try {
       await updateStatusMutation.mutateAsync({ ticketId: jobId, status });
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       setSuccessTitle("Status Updated");
       setSuccessMessage(`Ticket status is now ${status}.`);
       setSuccessVisible(true);
@@ -292,10 +452,14 @@ export const TechnicianJobDetailsScreen = () => {
     try {
       await rejectJobMutation.mutateAsync({ ticketId: jobId, reason: finalReason });
       setRejectFormVisible(false);
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       setSuccessTitle("Job Rejected");
       setSuccessMessage("This ticket has been rejected and will be reassigned.");
+      setShouldNavigateHome(true);
       setSuccessVisible(true);
-      await refetch();
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to reject job.");
     }
@@ -307,18 +471,43 @@ export const TechnicianJobDetailsScreen = () => {
       return;
     }
     try {
+      setUploadingImage(true);
+      const uploadedUrls: string[] = [];
+      for (const uri of pendingPhotos) {
+        if (uri.startsWith("http")) {
+          uploadedUrls.push(uri);
+        } else {
+          const res = await uploadImageMutation.mutateAsync({
+            ticketNo: jobId,
+            imageUri: uri,
+            type: "BEFORE",
+          });
+          if (res.url) {
+            uploadedUrls.push(res.url);
+          }
+        }
+      }
       await markPendingMutation.mutateAsync({
         ticketNo: jobId,
         pendingReason: selectedPendingReason,
         notes: pendingNotes,
+        photos: uploadedUrls,
       });
       setPendingFormVisible(false);
+      setPendingPhotos([]);
+      setPendingNotes("");
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       setSuccessTitle("Status Marked Pending");
       setSuccessMessage(`Ticket is now marked as pending. Reason: ${selectedPendingReason}`);
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to save status.");
+    } finally {
+      setUploadingImage(false);
     }
   };
 
@@ -333,6 +522,10 @@ export const TechnicianJobDetailsScreen = () => {
         nextVisitDate,
       });
       setRescheduleVisible(false);
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       setSuccessTitle("Job Rescheduled");
       setSuccessMessage(`Job has been rescheduled for ${nextVisitDate}.`);
       setSuccessVisible(true);
@@ -342,34 +535,39 @@ export const TechnicianJobDetailsScreen = () => {
     }
   };
 
-  const handlePhotoUpload = async (type: "BEFORE" | "AFTER") => {
+  // REACH LOCATION HANDLERS
+  const handleReachSubmit = async () => {
+    const coords = gpsCoords || { lat: 28.6139, lng: 77.2090 };
+    try {
+      await updateStatusMutation.mutateAsync({ ticketId: jobId, status: "REACHED_LOCATION" });
+      setReachFormVisible(false);
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+      setSuccessTitle("Reached Site ✓");
+      setSuccessMessage(`Arrival recorded at location: ${locationName || `${coords.lat}, ${coords.lng}`}`);
+      setSuccessVisible(true);
+      await refetch();
+    } catch (err: any) {
+      showAlert("Error", err.message || "Failed to record reached status.");
+    }
+  };
+
+  // BEFORE PHOTOS & START JOB HANDLERS
+  const pickBeforeFromCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
       showAlert("Permission Needed", "Camera access is required.");
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: "images",
-      quality: 0.7,
-    });
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
     if (!result.canceled && result.assets[0]) {
-      try {
-        setUploadingImage(true);
-        await uploadImageMutation.mutateAsync({
-          ticketNo: jobId,
-          imageUri: result.assets[0].uri,
-          type,
-        });
-        await refetch();
-      } catch (err: any) {
-        showAlert("Upload Error", err.message || "Failed to upload image.");
-      } finally {
-        setUploadingImage(false);
-      }
+      setBeforePhotos((prev) => [...prev, result.assets[0].uri]);
     }
   };
 
-  const handleGalleryUpload = async (type: "BEFORE" | "AFTER") => {
+  const pickBeforeFromGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       showAlert("Permission Needed", "Library access is required.");
@@ -378,77 +576,373 @@ export const TechnicianJobDetailsScreen = () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: "images",
       quality: 0.7,
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
     });
-    if (!result.canceled && result.assets[0]) {
-      try {
-        setUploadingImage(true);
-        await uploadImageMutation.mutateAsync({
-          ticketNo: jobId,
-          imageUri: result.assets[0].uri,
-          type,
-        });
-        await refetch();
-      } catch (err: any) {
-        showAlert("Upload Error", err.message || "Failed to upload image.");
-      } finally {
-        setUploadingImage(false);
-      }
+    if (!result.canceled && result.assets.length > 0) {
+      setBeforePhotos((prev) => [...prev, ...result.assets.map((a) => a.uri)]);
     }
   };
 
-  const handleCompletionSubmit = async () => {
-    if (!workNotes.trim()) {
-      showAlert("Required", "Please provide work summary notes.");
+  const removeBeforePhoto = (index: number) => {
+    setBeforePhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const startJobMutationCall = async () => {
+    try {
+      await savePhotosMutation.mutateAsync({ ticketNo: jobId, photos: beforePhotos });
+      setStartJobFormVisible(false);
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+      setSuccessTitle("Job Started ✓");
+      setSuccessMessage("Status set to IN PROGRESS. Your work timer has started.");
+      setSuccessVisible(true);
+      await refetch();
+    } catch (err: any) {
+      showAlert("Error", err.message || "Failed to start job.");
+    }
+  };
+
+  const handleStartJob = async () => {
+    if (beforePhotos.length === 0) {
+      showAlert("Before Photos Required", "Please capture at least 1 before photo of the job site.");
       return;
     }
+    if (job?.scheduledAt) {
+      const scheduledTimeMs = new Date(job.scheduledAt).getTime();
+      const currentTimeMs = Date.now();
+      if (currentTimeMs < scheduledTimeMs) {
+        setEarlyStartModalVisible(true);
+        return;
+      }
+    }
+    await startJobMutationCall();
+  };
+
+  // PENDING EVIDENCE PHOTOS HANDLERS
+  const pickPendingPhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (libStatus !== "granted") {
+        showAlert("Permission Needed", "Library access is required.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: "images",
+        quality: 0.7,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setPendingPhotos((p) => [...p, result.assets[0].uri]);
+      }
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!result.canceled && result.assets[0]) {
+      setPendingPhotos((p) => [...p, result.assets[0].uri]);
+    }
+  };
+
+  const removePendingPhoto = (index: number) => {
+    setPendingPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // AFTER PHOTOS HANDLERS
+  const pickAfterFromCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      showAlert("Permission Denied", "Camera access is required.");
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+    if (!result.canceled && result.assets[0]) {
+      setAfterPhotos((p) => [...p, result.assets[0].uri]);
+    }
+  };
+
+  const pickAfterFromGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      showAlert("Permission Denied", "Library access is required.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: "images",
+      quality: 0.8,
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
+    });
+    if (!result.canceled && result.assets.length > 0) {
+      setAfterPhotos((p) => [...p, ...result.assets.map((a) => a.uri)]);
+    }
+  };
+
+  const removeAfterPhoto = (index: number) => {
+    setAfterPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // COMPLETE JOB STEP PROCEDURES
+  const handleStep1Proceed = () => {
+    if (afterPhotos.length === 0) {
+      showAlert("After Photos Required", "Please capture at least 1 after photo showing completed work.");
+      return;
+    }
+    if (!workNotes.trim()) {
+      showAlert("Work Notes Required", "Please enter a work summary / resolution note.");
+      return;
+    }
+    setCompleteStep(2);
+  };
+
+  const handleStep2Proceed = () => {
+    if (!hasSigned || strokes.length === 0) {
+      showAlert("Signature Required", "Please ask the customer to sign on the pad.");
+      return;
+    }
+    setCompleteStep(3);
+  };
+
+  // SIGNATURE DRAWING PAD PAN RESPONDER
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      onPanResponderTerminationRequest: () => false,
+
+      onPanResponderGrant: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        const pt = { x: locationX, y: locationY };
+        currentStrokeRef.current = [pt];
+        setCurrentStroke([pt]);
+        setHasSigned(true);
+        setScrollEnabled(false);
+      },
+
+      onPanResponderMove: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        const pt = { x: locationX, y: locationY };
+        currentStrokeRef.current = [...currentStrokeRef.current, pt];
+        setCurrentStroke([...currentStrokeRef.current]);
+      },
+
+      onPanResponderRelease: () => {
+        if (currentStrokeRef.current.length > 0) {
+          const finishedStroke = [...currentStrokeRef.current];
+          setStrokes((prev) => [...prev, finishedStroke]);
+        }
+        currentStrokeRef.current = [];
+        setCurrentStroke([]);
+        setScrollEnabled(true);
+      },
+      onPanResponderTerminate: () => {
+        if (currentStrokeRef.current.length > 0) {
+          const finishedStroke = [...currentStrokeRef.current];
+          setStrokes((prev) => [...prev, finishedStroke]);
+        }
+        currentStrokeRef.current = [];
+        setCurrentStroke([]);
+        setScrollEnabled(true);
+      },
+    })
+  ).current;
+
+  const clearSignature = () => {
+    setStrokes([]);
+    currentStrokeRef.current = [];
+    setCurrentStroke([]);
+    setHasSigned(false);
+  };
+
+  const buildPath = (stroke: Stroke): string => {
+    if (stroke.length < 2) return "";
+    const [first, ...rest] = stroke;
+    return [`M ${first.x} ${first.y}`, ...rest.map((p) => `L ${p.x} ${p.y}`)].join(" ");
+  };
+
+
+  const addExtraCharge = () => {
+    setExtraCharges((prev) => [...prev, { id: Math.random().toString(), name: "", amountStr: "" }]);
+  };
+
+  const removeExtraCharge = (id: string) => {
+    setExtraCharges((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const updateExtraCharge = (id: string, field: "name" | "amountStr", value: string) => {
+    setExtraCharges((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  // NEW DECOUPLED COMPLETE SUBMIT
+  const handleCompleteSubmit = async () => {
+    if (!workNotes.trim()) {
+      showAlert("Notes Required", "Please enter work summary notes.");
+      return;
+    }
+    if (afterPhotos.length === 0) {
+      showAlert("Photo Required", "Please capture or select at least 1 photo of completed work.");
+      return;
+    }
+
+    setSubmitting(true);
     try {
+      // 1. Upload all after photos sequentially
+      const uniqueAfterPhotos = Array.from(new Set(afterPhotos));
+      for (const uri of uniqueAfterPhotos) {
+        if (!uri.startsWith("http")) {
+          await JobService.uploadTicketImage(jobId, uri, "AFTER");
+        }
+      }
+
+      // 2. Complete the job
       await completeJobMutation.mutateAsync({
         ticketNo: jobId,
         payload: {
-          beforePhotos: job?.beforePhotos || [],
-          afterPhotos: job?.afterPhotos || [],
-          customerSignature: "SIGNED IN CLIENT APP",
-          workNotes,
-          duration,
+          beforePhotos: job?.beforePhotos ?? [],
+          afterPhotos: uniqueAfterPhotos,
+          customerSignature: "captured",
+          workNotes: workNotes + (remarks.trim() ? ` | Remarks: ${remarks}` : ""),
+          duration: liveDuration || "—",
+          lat: gpsCoords?.lat ?? 28.6139,
+          lng: gpsCoords?.lng ?? 77.2090,
         },
       });
+
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+
+      setSuccessTitle("Job Completed ✓");
+      setSuccessMessage("Work summary and photos recorded successfully. Ticket status updated to COMPLETED.");
       setCompleteFormVisible(false);
-      setSuccessTitle("Job Completed");
-      setSuccessMessage("Work records saved successfully. Proceed to payment collection.");
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to complete ticket.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
+  // NEW DECOUPLED PAYMENT SUBMIT
   const handlePaymentSubmit = async () => {
-    const amt = parseFloat(paymentAmount);
-    if (isNaN(amt) || amt <= 0) {
-      showAlert("Required", "Please enter a valid collection amount.");
+    if (amount <= 0) {
+      showAlert("Amount Required", "Please enter a valid payment amount.");
       return;
     }
-    if (!paymentMethod) {
-      showAlert("Required", "Please select a payment method.");
-      return;
+
+    for (const item of extraCharges) {
+      const name = item.name.trim();
+      const val = parseFloat(item.amountStr);
+      const isFullyEmpty = name === "" && item.amountStr.trim() === "";
+      if (isFullyEmpty) {
+        continue;
+      }
+      if (name !== "" && (isNaN(val) || val <= 0)) {
+        showAlert("Validation Error", `Please enter a valid amount greater than 0 for extra charge: "${name}"`);
+        return;
+      }
+      if (name === "" && !isNaN(val) && val > 0) {
+        showAlert("Validation Error", `Please enter a charge name for the amount: ${currencySymbol}${item.amountStr}`);
+        return;
+      }
+    }
+
+    const validateTransactionId = (val: string): boolean => {
+      const trimmed = val.trim();
+      if (!trimmed) return false;
+      const regex = /^[a-zA-Z0-9]{8,35}$/;
+      return regex.test(trimmed);
+    };
+
+    if (paymentMode === "UPI") {
+      if (!paymentConfig || (!paymentConfig.upiId && !paymentConfig.upiQrImageUrl)) {
+        showAlert("UPI Not Configured", "UPI payment is not configured. Please select CASH payment mode.");
+        return;
+      }
+      const trimmedTxn = transactionId.trim();
+      if (!trimmedTxn) {
+        setTransactionIdError("Please enter a valid UPI transaction ID.");
+        showAlert("Transaction ID Required", "Please enter a valid UPI transaction ID.");
+        return;
+      }
+      if (!validateTransactionId(trimmedTxn)) {
+        setTransactionIdError("Please enter a valid UPI transaction ID.");
+        showAlert("Invalid Transaction ID", "Please enter a valid UPI transaction ID.");
+        return;
+      }
     }
     if (!paymentConfirmed) {
-      showAlert("Required", "Please confirm payment collection before submitting.");
+      showAlert("Confirm Payment", "Please toggle the payment confirmation before submitting.");
       return;
     }
+
+    setSubmitting(true);
     try {
-      await collectPaymentMutation.mutateAsync({
+      // 3. Collect payment
+      const payResult = await collectPaymentMutation.mutateAsync({
         ticketNo: jobId,
-        amount: amt,
-        paymentMethod,
+        payload: {
+          method: paymentMode,
+          amount: amount,
+          baseAmount,
+          platformFee,
+          shippingCharge,
+          handlingCharge,
+          subtotal,
+          gstEnabled,
+          gstPercent,
+          gstAmount,
+          discountAmount,
+          totalAmount: amount,
+          collectedAmount: amount,
+          upiId: paymentConfig?.upiId || undefined,
+          currency: paymentConfig?.currency || "INR",
+        },
       });
-      setPaymentFormVisible(false);
-      setSuccessTitle("Payment Captured");
-      setSuccessMessage(`Collected ₹${amt} via ${paymentMethod}. Ticket status updated to CLOSED.`);
+
+      // 4. Close the ticket explicitly
+      try {
+        await JobService.updateJobStatus(jobId, "CLOSED" as any);
+      } catch (err) {
+        console.warn("Failed to close ticket after payment", err);
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+      queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
+
+      // invoice generated
+      setSuccessTitle("Payment & Invoice Success ✓");
+      setSuccessMessage("Payment collected and invoice generated successfully.");
+      setCompleteFormVisible(false);
       setSuccessVisible(true);
       await refetch();
+
+      // Navigate to Home screen after 5 seconds
+      setTimeout(() => {
+        navigation.navigate("TechnicianHome");
+      }, 5000);
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to log payment.");
+      showAlert("Error", err.message || "Failed to collect payment.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleStep3Submit = async () => {
+    if (job?.status === "COMPLETED") {
+      await handlePaymentSubmit();
+    } else {
+      await handleCompleteSubmit();
     }
   };
 
@@ -483,21 +977,22 @@ export const TechnicianJobDetailsScreen = () => {
   const getActiveStep = (status: string) => {
     switch (status) {
       case "ASSIGNED":
-      case "NEW":
+      case "NEW_TICKET":
         return 0;
       case "ACCEPTED":
         return 1;
       case "TRAVELLING":
         return 2;
-      case "REACHED":
+      case "REACHED_LOCATION":
         return 3;
       case "IN_PROGRESS":
       case "PENDING":
-      case "RESCHEDULED":
         return 4;
       case "COMPLETED":
         return 5;
-      case "CLOSED":
+      case "TICKET_CLOSED":
+      case "INVOICE_GENERATED":
+      case "CANCELLED":
         return 6;
       default:
         return 0;
@@ -665,7 +1160,7 @@ export const TechnicianJobDetailsScreen = () => {
         </AppCard>
 
         {/* Customer Attached Media */}
-        {job.images && job.images.length > 0 && job.status !== "COMPLETED" && job.status !== "CLOSED" && (
+        {job.images && job.images.length > 0 && job.status !== "COMPLETED" && job.status !== "TICKET_CLOSED" && job.status !== "INVOICE_GENERATED" && (
           <>
             <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>Attached Media</Text>
             <View style={styles.photoGrid}>
@@ -712,8 +1207,8 @@ export const TechnicianJobDetailsScreen = () => {
         {/* Dynamic Action Controls */}
         <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>Execution Controls</Text>
 
-        {/* 1. ASSIGNED / NEW */}
-        {(job.status === "ASSIGNED" || job.status === "NEW") && (
+        {/* 1. ASSIGNED / NEW_TICKET */}
+        {(job.status === "ASSIGNED" || job.status === "NEW_TICKET") && (
           !isCheckedIn ? (
             <Pressable onPress={() => navigation.navigate("TechnicianHome")}>
               <AppCard style={styles.card}>
@@ -747,7 +1242,11 @@ export const TechnicianJobDetailsScreen = () => {
                 <AppButton
                   title="Reject"
                   variant="outline"
-                  onPress={() => navigation.navigate("RejectTicket", { jobId: job.id, ticketNo: job.ticketNo })}
+                  onPress={() => {
+                    setSelectedRejectReason("");
+                    setRejectReasonText("");
+                    setRejectFormVisible(true);
+                  }}
                   style={{ flex: 1, borderColor: theme.colors.danger }}
                   textStyle={{ color: theme.colors.danger }}
                 />
@@ -767,37 +1266,33 @@ export const TechnicianJobDetailsScreen = () => {
           <AppCard style={styles.card}>
             <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>Ticket Accepted</Text>
             <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
-              You have accepted the ticket. Tap below to start travelling to client location.
+              You have accepted the ticket. Tap below when you start travelling to the client site.
             </Text>
             <AppButton
               title="Start Travel"
-              onPress={async () => {
-                try {
-                  await handleStatusChange("TRAVELLING");
-                  navigation.navigate("TravelTracking", { jobId: job.id, ticketNo: job.ticketNo, address: job.address });
-                } catch {}
-              }}
+              onPress={() => handleStatusChange("TRAVELLING")}
               loading={updateStatusMutation.isPending}
             />
           </AppCard>
         )}
 
-        {/* 3. TRAVELLING */}
+        {/* 2.5. TRAVELLING */}
         {job.status === "TRAVELLING" && (
           <AppCard style={styles.card}>
-            <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>On the Way</Text>
+            <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>Travelling to Site</Text>
             <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
-              You are currently travelling. Tap below to open travel tracking screen.
+              You are en route to the client's location. Tap below to record site arrival.
             </Text>
             <AppButton
-              title="View Travel Tracking"
-              onPress={() => navigation.navigate("TravelTracking", { jobId: job.id, ticketNo: job.ticketNo, address: job.address })}
+              title="Reach Location"
+              onPress={() => setReachFormVisible(true)}
+              loading={updateStatusMutation.isPending}
             />
           </AppCard>
         )}
 
-        {/* 4. REACHED */}
-        {job.status === "REACHED" && (
+        {/* 3. REACHED */}
+        {job.status === "REACHED_LOCATION" && (
           <AppCard style={styles.card}>
             <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>Reached Site Location</Text>
             <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
@@ -805,12 +1300,12 @@ export const TechnicianJobDetailsScreen = () => {
             </Text>
             <AppButton
               title="Begin Job Execution"
-              onPress={() => navigation.navigate("StartJob", { jobId: job.id, ticketNo: job.ticketNo })}
+              onPress={() => setStartJobFormVisible(true)}
             />
           </AppCard>
         )}
 
-        {/* 5. IN_PROGRESS */}
+        {/* 4. IN_PROGRESS */}
         {job.status === "IN_PROGRESS" && (
           <AppCard style={styles.card}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -822,77 +1317,176 @@ export const TechnicianJobDetailsScreen = () => {
             </View>
 
             <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 14 }}>
-              Job execution is active. View the work timer to manage pending status or complete work.
+              Job execution is active. You can track work duration and complete or pause the job below:
             </Text>
 
-            <AppButton
-              title="Open Work Timer"
-              onPress={() => navigation.navigate("WorkTimer", { jobId: job.id, ticketNo: job.ticketNo })}
-              icon={<Clock size={16} color="#ffffff" />}
-            />
+            {/* Inline Timer Container */}
+            <View
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: `${theme.colors.success}08`,
+                borderWidth: 1.5,
+                borderColor: theme.colors.success,
+                borderRadius: 12,
+                paddingVertical: 18,
+                paddingHorizontal: 12,
+                marginVertical: 14,
+                gap: 6,
+              }}
+            >
+              <Clock size={24} color={theme.colors.success} />
+              <Text style={{ fontSize: 10, fontWeight: "700", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.6 }}>
+                Work Duration In Progress
+              </Text>
+              <Text
+                style={{
+                  fontSize: 36,
+                  fontWeight: "800",
+                  color: theme.colors.success,
+                  fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+                  letterSpacing: 1.5,
+                }}
+              >
+                {liveDuration || "00:00:00"}
+              </Text>
+            </View>
+
+            <View style={styles.btnRow}>
+              <AppButton
+                title="Mark Pending"
+                variant="outline"
+                onPress={() => {
+                  setSelectedPendingReason("");
+                  setPendingNotes("");
+                  setPendingPhotos([]);
+                  setPendingFormVisible(true);
+                }}
+                style={{ flex: 1, borderColor: theme.colors.warning }}
+                textStyle={{ color: theme.colors.warning }}
+                icon={<AlertTriangle size={14} color={theme.colors.warning} />}
+              />
+              <AppButton
+                title="Complete Job"
+                onPress={() => {
+                  setCompleteStep(1);
+                  setCompleteFormVisible(true);
+                }}
+                variant="success"
+                style={{ flex: 1.5 }}
+                icon={<CheckCircle size={14} color="#ffffff" />}
+              />
+            </View>
           </AppCard>
         )}
 
-        {/* 6. COMPLETED */}
+        {/* 5. COMPLETED */}
         {job.status === "COMPLETED" && (
           <AppCard style={styles.card}>
             <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>Service Completed</Text>
             <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
-              Job execution is done. Tap below to log the payment details and generate the invoice.
+              Job execution is complete. Please collect payment and generate the customer invoice.
             </Text>
             <AppButton
-              title="Collect Payment & Generate Invoice"
+              title="Collect Payment"
               variant="success"
-              onPress={() => navigation.navigate("CompleteJob", { jobId: job.id, ticketNo: job.ticketNo, customerName: job.customerName ?? "", startStep: 3 })}
+              onPress={() => {
+                setCompleteStep(3);
+                setCompleteFormVisible(true);
+              }}
             />
           </AppCard>
         )}
 
-        {/* 7. CLOSED / INVOICE_GENERATED */}
-        {(job.status === "CLOSED" || (job.status as string) === "INVOICE_GENERATED") && (
-          <AppCard style={styles.card}>
-            <View style={[styles.successBanner, { backgroundColor: `${theme.colors.success}10`, borderColor: theme.colors.success, marginBottom: 16 }]}>
-              <CheckCircle2 size={24} color={theme.colors.success} style={{ marginRight: 8 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: theme.colors.success, fontWeight: "700", fontSize: 14 }}>
-                  Ticket Closed & Settled
-                </Text>
-                {job.paymentCollection !== undefined && (
-                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4 }}>
-                    Payment: ₹{job.paymentCollection} via {job.paymentMethod}
-                  </Text>
-                )}
-              </View>
+        {/* 6. TICKET_CLOSED / INVOICE_GENERATED */}
+        {(job.status === "TICKET_CLOSED" || job.status === "INVOICE_GENERATED") && (() => {
+          const invTotal = job.invoiceSubtotal ?? job.paymentCollection ?? 0;
+          const gstPrcnt = job.invoiceGstPercent ?? 0;
+          const invBase = Math.round((invTotal / (1 + gstPrcnt/100)) * 100) / 100;
+          const invGst = Math.round((invTotal - invBase) * 100) / 100;
+          const invDate = job.invoiceGeneratedAt ? new Date(job.invoiceGeneratedAt).toLocaleDateString("en-IN") : new Date().toLocaleDateString("en-IN");
+          const invNum = job.invoiceNo || `INV-${job.ticketNo}`;
+          
+          const ticketBasePrice = job?.serviceCharge ?? job?.categoryPrice ?? 0;
+          const sparesAmount = (ticketBasePrice > 0 && invBase > ticketBasePrice) 
+            ? Math.round((invBase - ticketBasePrice) * 100) / 100 
+            : 0;
+          const displayBaseAmount = sparesAmount > 0 ? ticketBasePrice : invBase;
+
+          return (
+            <View>
+              <AppCard style={[styles.card, { marginBottom: 16 }]}>
+                <View style={[styles.successBanner, { backgroundColor: `${theme.colors.success}10`, borderColor: theme.colors.success }]}>
+                  <CheckCircle2 size={24} color={theme.colors.success} style={{ marginRight: 8 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: theme.colors.success, fontWeight: "700", fontSize: 14 }}>
+                      Ticket Closed
+                    </Text>
+                    <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4 }}>
+                      Invoice successfully generated.
+                    </Text>
+                  </View>
+                </View>
+              </AppCard>
+
+              <PaymentBreakdownCard
+                invoiceNo={invNum}
+                ticketNo={job.ticketNo}
+                customerName={job.customerName}
+                baseAmount={displayBaseAmount}
+                extraCharges={sparesAmount}
+                gstEnabled={gstPrcnt > 0}
+                gstPercent={gstPrcnt}
+                gstAmount={invGst}
+                totalAmount={invTotal}
+                collectedAmount={invTotal}
+                paymentMode={job.paymentMethod ?? "—"}
+                paymentStatus="Collected"
+                invoiceDate={invDate}
+                currency={currencySymbol}
+                onViewInvoice={() => navigation.navigate("InvoiceGenerate", {
+                  jobId: job.id,
+                  ticketNo: job.ticketNo,
+                  amount: job.paymentCollection ?? 0,
+                  paymentMethod: job.paymentMethod ?? "CASH",
+                  invoiceNo: job.invoiceNo ?? `INV-${job.ticketNo}`,
+                  invoiceSubtotal: job.invoiceSubtotal,
+                  invoiceGstAmount: job.invoiceGstAmount,
+                  invoiceGstPercent: job.invoiceGstPercent,
+                  invoiceTotal: job.invoiceTotal,
+                  invoiceGeneratedAt: job.invoiceGeneratedAt,
+                })}
+              />
             </View>
-            
-            <AppButton
-              title="View Invoice Details"
-              variant="outline"
-              onPress={() => navigation.navigate("InvoiceGenerate", {
-                jobId: job.id,
-                ticketNo: job.ticketNo,
-                amount: job.paymentCollection ?? 0,
-                paymentMethod: job.paymentMethod ?? "CASH",
-                invoiceNo: job.invoiceNo ?? `INV-${job.ticketNo}`,
-                invoiceSubtotal:   job.invoiceSubtotal,
-                invoiceGstAmount:  job.invoiceGstAmount,
-                invoiceGstPercent: job.invoiceGstPercent,
-                invoiceTotal:      job.invoiceTotal,
-                invoiceGeneratedAt: job.invoiceGeneratedAt,
-              })}
-              icon={<Receipt size={16} color={theme.colors.primary} />}
-            />
-          </AppCard>
-        )}
+          );
+        })()}
 
         {/* 8. PENDING / RESCHEDULED */}
         {job.status === "PENDING" && !rescheduleVisible && (
           <AppCard style={styles.card}>
-            <View style={[styles.alertBox, { backgroundColor: `${theme.colors.danger}10`, borderColor: theme.colors.danger }]}>
+            <View style={[styles.alertBox, { backgroundColor: `${theme.colors.danger}10`, borderColor: theme.colors.danger, marginBottom: 16 }]}>
               <AlertCircle size={20} color={theme.colors.danger} />
               <Text style={{ color: theme.colors.text, fontSize: 13, flex: 1 }}>
                 Reason: <Text style={{ fontWeight: "700" }}>{job.pendingReason}</Text>
               </Text>
+            </View>
+            <View style={styles.btnRow}>
+              <AppButton
+                title="Resume Work"
+                onPress={() => handleStatusChange("IN_PROGRESS")}
+                style={{ flex: 1.5 }}
+                loading={updateStatusMutation.isPending}
+              />
+              <AppButton
+                title="Complete Job"
+                variant="outline"
+                onPress={() => {
+                  setCompleteStep(1);
+                  setCompleteFormVisible(true);
+                }}
+                style={{ flex: 1, borderColor: theme.colors.success }}
+                textStyle={{ color: theme.colors.success }}
+              />
             </View>
           </AppCard>
         )}
@@ -939,6 +1533,757 @@ export const TechnicianJobDetailsScreen = () => {
         )}
       </ScrollView>
 
+      {/* Reject Modal */}
+      <Modal visible={rejectFormVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%", alignItems: "center" }}>
+            <AppCard style={styles.modalContent}>
+              <Text style={[styles.formTitle, { color: theme.colors.text }]}>Reject Ticket</Text>
+              <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 12 }}>
+                Please select a reason for rejecting this service ticket:
+              </Text>
+              <View style={{ gap: 8, marginBottom: 16 }}>
+                {QUICK_REASONS.map((reason) => {
+                  const isSel = selectedRejectReason === reason;
+                  return (
+                    <Pressable
+                      key={reason}
+                      onPress={() => {
+                        setSelectedRejectReason(reason);
+                        if (reason !== "Other") setRejectReasonText("");
+                      }}
+                      style={[
+                        styles.reasonOption,
+                        {
+                          borderColor: isSel ? theme.colors.danger : theme.colors.borderLight,
+                          backgroundColor: isSel ? `${theme.colors.danger}08` : theme.colors.card,
+                        },
+                      ]}
+                    >
+                      <Text style={{ color: theme.colors.text, fontWeight: isSel ? "700" : "500" }}>{reason}</Text>
+                    </Pressable>
+                  );
+                })}
+                <Pressable
+                  onPress={() => setSelectedRejectReason("Other")}
+                  style={[
+                    styles.reasonOption,
+                    {
+                      borderColor: selectedRejectReason === "Other" ? theme.colors.danger : theme.colors.borderLight,
+                      backgroundColor: selectedRejectReason === "Other" ? `${theme.colors.danger}08` : theme.colors.card,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: theme.colors.text, fontWeight: selectedRejectReason === "Other" ? "700" : "500" }}>Other Reason</Text>
+                </Pressable>
+              </View>
+
+              {selectedRejectReason === "Other" && (
+                <AppInput
+                  label="Describe Reason"
+                  placeholder="Type rejection notes here..."
+                  value={rejectReasonText}
+                  onChangeText={setRejectReasonText}
+                  multiline
+                  numberOfLines={3}
+                />
+              )}
+
+              <View style={styles.btnRow}>
+                <AppButton title="Cancel" variant="outline" onPress={() => setRejectFormVisible(false)} style={{ flex: 1 }} />
+                <AppButton title="Submit Reject" variant="danger" onPress={handleRejectSubmit} loading={rejectJobMutation.isPending} style={{ flex: 1.5 }} />
+              </View>
+            </AppCard>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Reach Location Modal */}
+      <Modal visible={reachFormVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <AppCard style={styles.modalContent}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <MapPin size={24} color={theme.colors.primary} />
+              <Text style={[styles.formTitle, { color: theme.colors.text, marginBottom: 0 }]}>Mark Reach Location</Text>
+            </View>
+
+            <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
+              Confirm your arrival at the client's destination:
+            </Text>
+
+            <View style={[styles.alertBox, { backgroundColor: `${theme.colors.primary}08`, borderColor: theme.colors.borderLight, marginBottom: 16 }]}>
+              <MapPin size={18} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.text, fontSize: 13, flex: 1 }}>
+                Destination: <Text style={{ fontWeight: "700" }}>{job.address}</Text>
+              </Text>
+            </View>
+
+            <View style={{ padding: 12, borderRadius: 8, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#e2e8f0", marginBottom: 20 }}>
+              <Text style={{ fontSize: 11, fontWeight: "700", color: theme.colors.textMuted, textTransform: "uppercase", marginBottom: 4 }}>GPS Status</Text>
+              {gpsLoading ? (
+                <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Acquiring coordinates address...</Text>
+              ) : gpsError ? (
+                <Text style={{ fontSize: 13, color: theme.colors.danger }}>{gpsError}</Text>
+              ) : locationName ? (
+                <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{locationName}</Text>
+              ) : (
+                <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Waiting for location...</Text>
+              )}
+            </View>
+
+            <View style={styles.btnRow}>
+              <AppButton title="Cancel" variant="outline" onPress={() => setReachFormVisible(false)} style={{ flex: 1 }} />
+              <AppButton
+                title="Mark as Reached"
+                onPress={handleReachSubmit}
+                loading={updateStatusMutation.isPending}
+                disabled={updateStatusMutation.isPending}
+                style={{ flex: 1.5 }}
+              />
+            </View>
+          </AppCard>
+        </View>
+      </Modal>
+
+      {/* Start Job Modal */}
+      <Modal visible={startJobFormVisible} animationType="slide" transparent>
+        <ScrollView
+          style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.6)" }}
+          contentContainerStyle={{ flexGrow: 1, justifyContent: "center", alignItems: "center", padding: 16 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <AppCard style={styles.modalContent}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <PlayCircle size={24} color={theme.colors.success} />
+              <Text style={[styles.formTitle, { color: theme.colors.text, marginBottom: 0 }]}>Begin Job Execution</Text>
+            </View>
+
+            <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 14 }}>
+              Before starting execution, capture at least 1 photo of the site condition:
+            </Text>
+
+            {/* Photos Grid */}
+            {beforePhotos.length > 0 && (
+              <View style={styles.photoGrid}>
+                {beforePhotos.map((uri, idx) => (
+                  <Pressable key={idx} onLongPress={() => removeBeforePhoto(idx)} style={styles.photoWrapper}>
+                    <Image source={{ uri }} style={styles.photoThumbnail} />
+                    <View style={[styles.photoIndex, { backgroundColor: theme.colors.primary }]}>
+                      <Text style={styles.photoIndexText}>{idx + 1}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
+            {/* Photo Upload Actions */}
+            <View style={styles.photoBtnRow}>
+              <Pressable
+                onPress={pickBeforeFromCamera}
+                style={({ pressed }) => [
+                  styles.photoActionBtn,
+                  { backgroundColor: theme.colors.card, borderColor: theme.colors.border, opacity: pressed ? 0.7 : 1 }
+                ]}
+              >
+                <Camera size={20} color={theme.colors.primary} />
+                <Text style={[styles.photoActionLabel, { color: theme.colors.text, fontSize: 12 }]}>Take Photo</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={pickBeforeFromGallery}
+                style={({ pressed }) => [
+                  styles.photoActionBtn,
+                  { backgroundColor: theme.colors.card, borderColor: theme.colors.border, opacity: pressed ? 0.7 : 1 }
+                ]}
+              >
+                <ImagePlus size={20} color={theme.colors.primary} />
+                <Text style={[styles.photoActionLabel, { color: theme.colors.text, fontSize: 12 }]}>From Gallery</Text>
+              </Pressable>
+            </View>
+
+            {beforePhotos.length > 0 && (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "#f0fdf4",
+                  borderWidth: 1,
+                  borderColor: "#dcfce7",
+                  borderRadius: 12,
+                  paddingVertical: 10,
+                  paddingHorizontal: 16,
+                  marginBottom: 18,
+                  gap: 8,
+                }}
+              >
+                <CheckCircle2 size={16} color="#22c55e" />
+                <Text style={{ fontSize: 13, fontWeight: "600", color: "#166534" }}>
+                  {beforePhotos.length} Site Photo{beforePhotos.length > 1 ? "s" : ""} Selected
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.btnRow}>
+              <AppButton title="Cancel" variant="outline" onPress={() => setStartJobFormVisible(false)} style={{ flex: 1 }} />
+              <AppButton
+                title="Start Job"
+                variant="success"
+                onPress={handleStartJob}
+                loading={savePhotosMutation.isPending}
+                disabled={beforePhotos.length === 0}
+                style={{ flex: 1.5 }}
+              />
+            </View>
+          </AppCard>
+        </ScrollView>
+      </Modal>
+
+      {/* Early Start Warning Modal */}
+      <AppConfirmModal
+        visible={earlyStartModalVisible}
+        title="Early Start Warning"
+        message={`You are starting this job before the scheduled visit time (${job.scheduledDate} · ${job.scheduledTime}).\n\nAre you sure you want to proceed and start work now?`}
+        confirmText="Yes, Start Now"
+        cancelText="Cancel"
+        confirmVariant="warning"
+        onConfirm={async () => {
+          setEarlyStartModalVisible(false);
+          await startJobMutationCall();
+        }}
+        onCancel={() => setEarlyStartModalVisible(false)}
+      />
+
+      {/* Mark Pending Modal */}
+      <Modal visible={pendingFormVisible} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.6)", justifyContent: "center", alignItems: "center", padding: 16 }}>
+          <AppCard style={[styles.modalContent, { width: "100%", maxWidth: 420, maxHeight: "90%" }]}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }} style={{ width: "100%" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <AlertTriangle size={24} color={theme.colors.warning} />
+                <Text style={[styles.formTitle, { color: theme.colors.text, marginBottom: 0 }]}>Mark as Pending</Text>
+              </View>
+
+              <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 14 }}>
+                Select a reason to flag this service ticket as pending:
+              </Text>
+
+              {/* Reasons */}
+              <View style={{ gap: 8, marginBottom: 16 }}>
+                {PENDING_REASONS.map((reason) => {
+                  const isSel = selectedPendingReason === reason;
+                  return (
+                    <Pressable
+                      key={reason}
+                      onPress={() => setSelectedPendingReason(reason)}
+                      style={[
+                        styles.reasonOption,
+                        {
+                          borderColor: isSel ? theme.colors.warning : theme.colors.borderLight,
+                          backgroundColor: isSel ? `${theme.colors.warning}06` : theme.colors.card,
+                          paddingVertical: 12,
+                          paddingHorizontal: 16,
+                          gap: 12,
+                          borderRadius: 10,
+                        },
+                      ]}
+                    >
+                      <View style={[styles.radioOuter, { borderColor: isSel ? theme.colors.warning : theme.colors.border }]}>
+                        {isSel && <View style={[styles.radioInner, { backgroundColor: theme.colors.warning }]} />}
+                      </View>
+                      <Text style={{ color: theme.colors.text, fontWeight: isSel ? "700" : "500", fontSize: 13.5, flex: 1 }}>{reason}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Notes */}
+              <AppInput
+                label="Additional Notes (optional)"
+                placeholder="Describe why job is pending..."
+                value={pendingNotes}
+                onChangeText={setPendingNotes}
+                multiline
+                numberOfLines={3}
+              />
+
+              {/* Photo upload */}
+              <Text style={[styles.formLabel, { color: theme.colors.textMuted, marginTop: 8 }]}>Evidence Photos (optional)</Text>
+              <View style={[styles.photoGrid, { marginBottom: 12 }]}>
+                {pendingPhotos.map((uri, idx) => (
+                  <Pressable key={idx} onLongPress={() => removePendingPhoto(idx)} style={styles.photoWrapper}>
+                    <Image source={{ uri }} style={styles.photoThumbnail} />
+                  </Pressable>
+                ))}
+                {pendingPhotos.length < 3 && (
+                  <Pressable
+                    onPress={pickPendingPhoto}
+                    style={[styles.addPhotoBtn, { borderColor: theme.colors.border }]}
+                  >
+                    <Camera size={20} color={theme.colors.textMuted} />
+                    <Text style={{ fontSize: 10, color: theme.colors.textMuted }}>Add</Text>
+                  </Pressable>
+                )}
+              </View>
+
+              <View style={styles.btnRow}>
+                <AppButton title="Cancel" variant="outline" onPress={() => setPendingFormVisible(false)} style={{ flex: 1 }} />
+                <AppButton
+                  title="Submit Pending"
+                  variant="warning"
+                  onPress={handlePendingSubmit}
+                  loading={markPendingMutation.isPending || uploadingImage}
+                  disabled={!selectedPendingReason}
+                  style={{ flex: 1.5 }}
+                />
+              </View>
+            </ScrollView>
+          </AppCard>
+        </View>
+      </Modal>
+
+      {/* Complete Job & Payment Collection Modal */}
+      <Modal visible={completeFormVisible} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.6)", justifyContent: "center", alignItems: "center", padding: 16 }}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={{ width: "100%", maxWidth: 420, maxHeight: "90%" }}
+          >
+            <AppCard style={{ width: "100%", padding: 16, backgroundColor: theme.colors.background, borderRadius: 16, maxHeight: "100%" }}>
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }} style={{ width: "100%" }}>
+                {/* Header */}
+                <View style={{ borderBottomWidth: 1, borderColor: theme.colors.borderLight, paddingBottom: 12, marginBottom: 16 }}>
+                  <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.text }}>
+                    {job?.status === "COMPLETED" ? "Collect Payment" : "Complete Work Order"}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                    Ticket: {job?.ticketNo}
+                  </Text>
+                </View>
+                {job?.status !== "COMPLETED" && (
+                  <View style={{ marginBottom: 20 }}>
+                    <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
+                      1. Work Summary & Photos
+                    </Text>
+                    <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
+                      <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                        Work Summary Notes<Text style={{ color: theme.colors.danger }}> *</Text>
+                      </Text>
+                      <View style={[styles.textAreaContainer, { borderColor: workNotes ? theme.colors.primary : theme.colors.border, backgroundColor: theme.colors.card, borderRadius: 10, borderWidth: 1.5, padding: 10, minHeight: 90 }]}>
+                        <TextInput
+                          value={workNotes}
+                          onChangeText={setWorkNotes}
+                          placeholder="Detail what was completed and any resolutions..."
+                          placeholderTextColor={theme.colors.textLight}
+                          multiline
+                          numberOfLines={3}
+                          style={[styles.textArea, { color: theme.colors.text, fontSize: 14, textAlignVertical: "top" }]}
+                        />
+                      </View>
+
+                      <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>
+                        After Photos<Text style={{ color: theme.colors.danger }}> *</Text>
+                      </Text>
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginBottom: 8 }}>At least 1 photo showing completed work is required.</Text>
+                      <View style={styles.photoGrid}>
+                        {afterPhotos.map((uri, idx) => (
+                          <Pressable key={idx} onLongPress={() => removeAfterPhoto(idx)} style={styles.photoWrapper}>
+                            <Image source={{ uri }} style={styles.photoThumbnail} />
+                            <View style={[styles.photoIndex, { backgroundColor: theme.colors.primary }]}>
+                              <Text style={styles.photoIndexText}>{idx + 1}</Text>
+                            </View>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <View style={styles.photoBtnRow}>
+                        <Pressable
+                          onPress={pickAfterFromCamera}
+                          style={({ pressed }) => [
+                            styles.photoActionBtn,
+                            { backgroundColor: theme.colors.card, borderColor: theme.colors.border, opacity: pressed ? 0.7 : 1 }
+                          ]}
+                        >
+                          <Camera size={20} color={theme.colors.primary} />
+                          <Text style={[styles.photoActionLabel, { color: theme.colors.text, fontSize: 12 }]}>Take Photo</Text>
+                        </Pressable>
+
+                        <Pressable
+                          onPress={pickAfterFromGallery}
+                          style={({ pressed }) => [
+                            styles.photoActionBtn,
+                            { backgroundColor: theme.colors.card, borderColor: theme.colors.border, opacity: pressed ? 0.7 : 1 }
+                          ]}
+                        >
+                          <ImagePlus size={20} color={theme.colors.primary} />
+                          <Text style={[styles.photoActionLabel, { color: theme.colors.text, fontSize: 12 }]}>From Gallery</Text>
+                        </Pressable>
+                      </View>
+
+                      {/* Work time & GPS verified badge */}
+                      <View style={{ marginTop: 14, padding: 12, borderRadius: 12, backgroundColor: "#f0fdf4", borderWidth: 1, borderColor: "#bbf7d0", flexDirection: "row", alignItems: "center", gap: 12 }}>
+                        <ShieldCheck size={28} color="#22c55e" />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "800", color: "#166534", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Work Time & GPS Verified
+                          </Text>
+                          <Text style={{ fontSize: 13, color: "#14532d", fontWeight: "600", marginTop: 2 }}>
+                            Duration: {duration}
+                          </Text>
+                          {gpsCoords ? (
+                            <Text style={{ fontSize: 12, color: "#166534", marginTop: 1, fontWeight: "500" }}>
+                              GPS Lock: {locationName || `${gpsCoords.lat.toFixed(6)}, ${gpsCoords.lng.toFixed(6)}`}
+                            </Text>
+                          ) : (
+                            <Text style={{ fontSize: 12, color: theme.colors.warning, marginTop: 1, fontWeight: "500" }}>
+                              Acquiring GPS Lock...
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                )}
+
+                {/* 2. Customer Signature Section (Skip if already completed) */}
+                {false && job?.status !== "COMPLETED" && (
+                  <View style={{ marginBottom: 20 }}>
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
+                      2. Customer Verification
+                    </Text>
+                    <AppCard style={{ padding: 14 }}>
+                      <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 8 }}>
+                        Ask the customer to sign on the signature pad below:
+                      </Text>
+
+                      <View style={styles.padHeader}>
+                        <View style={styles.padLabelRow}>
+                          <PenLine size={16} color={theme.colors.primary} />
+                          <Text style={[styles.padLabel, { color: theme.colors.text, fontSize: 13 }]}>Signature Pad<Text style={{ color: theme.colors.danger }}> *</Text></Text>
+                        </View>
+                        <Pressable onPress={clearSignature} style={[styles.clearBtn, { backgroundColor: `${theme.colors.danger}12` }]}>
+                          <Trash2 size={12} color={theme.colors.danger} />
+                          <Text style={{ fontSize: 11, color: theme.colors.danger, fontWeight: "600" }}>Clear</Text>
+                        </Pressable>
+                      </View>
+
+                      <View
+                        style={[styles.signaturePad, { borderColor: hasSigned ? theme.colors.primary : theme.colors.border, backgroundColor: theme.colors.card }]}
+                        {...panResponder.panHandlers}
+                      >
+                        <Svg pointerEvents="none" width="100%" height={160} style={StyleSheet.absoluteFill}>
+                          {strokes.map((stroke, i) => (
+                            <Path
+                              key={i}
+                              d={buildPath(stroke)}
+                              stroke={theme.colors.text}
+                              strokeWidth={2.5}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              fill="none"
+                            />
+                          ))}
+                          {currentStroke.length > 0 && (
+                            <Path
+                              d={buildPath(currentStroke)}
+                              stroke={theme.colors.text}
+                              strokeWidth={2.5}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              fill="none"
+                            />
+                          )}
+                        </Svg>
+
+                        {!hasSigned && (
+                          <View style={styles.padPlaceholder} pointerEvents="none">
+                            <PenLine size={24} color={theme.colors.borderLight} />
+                            <Text style={{ fontSize: 12, color: theme.colors.textLight }}>Customer signature space</Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <AppInput
+                        label="Customer Remarks (optional)"
+                        placeholder="e.g. Good service..."
+                        value={remarks}
+                        onChangeText={setRemarks}
+                      />
+                    </AppCard>
+                  </View>
+                )}
+
+                {/* 3. Billing & Payment Section (Always show) */}
+                <View style={{ marginBottom: 20 }}>
+                  {job?.status !== "COMPLETED" && (
+                    <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
+                      2. Billing & Payment
+                    </Text>
+                  )}
+                  <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
+                    <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>Base Service Charge ({currencySymbol})</Text>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        backgroundColor: "#f8fafc",
+                        borderWidth: 1.5,
+                        borderColor: theme.colors.border,
+                        borderRadius: 10,
+                        paddingHorizontal: 12,
+                        height: 46,
+                        gap: 8,
+                      }}
+                    >
+                      <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
+                      <TextInput
+                        value={amountStr}
+                        editable={false}
+                        style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
+                      />
+                    </View>
+
+                    {/* Extra charges */}
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 8 }}>
+                      <Text style={{ fontSize: 13, fontWeight: "600", color: theme.colors.text }}>Extra Charges</Text>
+                      <Pressable onPress={addExtraCharge} style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: `${theme.colors.primary}12` }}>
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>+ Add Item</Text>
+                      </Pressable>
+                    </View>
+
+                    {extraCharges.map((item) => (
+                      <View key={item.id} style={{ flexDirection: "row", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                        <TextInput
+                          value={item.name}
+                          onChangeText={(val) => updateExtraCharge(item.id, "name", val)}
+                          placeholder="Charge Item Name"
+                          style={{ flex: 1.5, height: 40, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, paddingHorizontal: 10, fontSize: 13, color: theme.colors.text, backgroundColor: theme.colors.card }}
+                        />
+                        <View style={{ flex: 1, flexDirection: "row", alignItems: "center", height: 40, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, paddingHorizontal: 10, backgroundColor: theme.colors.card, gap: 4 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>{currencySymbol}</Text>
+                          <TextInput
+                            value={item.amountStr}
+                            onChangeText={(val) => updateExtraCharge(item.id, "amountStr", val)}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                            style={{ flex: 1, fontSize: 13, color: theme.colors.text, paddingVertical: 0 }}
+                          />
+                        </View>
+                        <Pressable onPress={() => removeExtraCharge(item.id)} style={{ padding: 6 }}>
+                          <Trash2 size={16} color={theme.colors.danger} />
+                        </Pressable>
+                      </View>
+                    ))}
+
+                    {/* Total billing breakdown */}
+                    <View style={{ marginTop: 14, padding: 14, borderRadius: 12, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#e2e8f0" }}>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                        <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Service Amount</Text>
+                        <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{base.toLocaleString("en-IN")}</Text>
+                      </View>
+                      
+                      {extraChargesSum > 0 && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Extra Charges Sum</Text>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{extraChargesSum.toLocaleString("en-IN")}</Text>
+                        </View>
+                      )}
+
+                      {platformCharges?.platformFee !== undefined && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Platform Fee</Text>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{platformFee.toLocaleString("en-IN")}</Text>
+                        </View>
+                      )}
+
+                      {platformCharges?.shippingEnabled && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Shipping Charge</Text>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{shippingCharge.toLocaleString("en-IN")}</Text>
+                        </View>
+                      )}
+
+                      {platformCharges?.handlingEnabled && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Handling Charge</Text>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{handlingCharge.toLocaleString("en-IN")}</Text>
+                        </View>
+                      )}
+
+                      {(platformCharges?.dailyDiscountEnabled || platformCharges?.weeklyDiscountEnabled || platformCharges?.monthlyDiscountEnabled) && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.danger }}>Discount</Text>
+                          <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600" }}>-{currencySymbol}{discountAmount.toLocaleString("en-IN")}</Text>
+                        </View>
+                      )}
+
+                      {gstEnabled && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Tax ({gstPercent}%)</Text>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{gstAmount.toLocaleString("en-IN")}</Text>
+                        </View>
+                      )}
+                      
+                      <View style={{ height: 1, backgroundColor: "#cbd5e1", marginVertical: 8 }} />
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.text }}>Total Payable</Text>
+                        <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.primary }}>{currencySymbol}{amount.toLocaleString("en-IN")}</Text>
+                      </View>
+                    </View>
+
+                    
+                    {/* Mode cash/upi */}
+                    <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>
+                    <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
+                      <Pressable
+                        onPress={() => setPaymentMode("CASH")}
+                        style={{
+                          flex: 1,
+                          height: 48,
+                          borderRadius: 8,
+                          borderWidth: 2,
+                          borderColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.borderLight,
+                          justifyContent: "center",
+                          alignItems: "center",
+                          backgroundColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.card,
+                          shadowColor: paymentMode === "CASH" ? theme.colors.primary : "#000",
+                          shadowOffset: { width: 0, height: 1 },
+                          shadowOpacity: paymentMode === "CASH" ? 0.3 : 0,
+                          shadowRadius: 2,
+                          elevation: paymentMode === "CASH" ? 2 : 0,
+                        }}
+                      >
+                        <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "CASH" ? "#ffffff" : theme.colors.textMuted }}>CASH</Text>
+                      </Pressable>
+                      {paymentConfig?.upiEnabled && (
+                        <Pressable
+                          onPress={() => setPaymentMode("UPI")}
+                          style={{
+                            flex: 1,
+                            height: 48,
+                            borderRadius: 8,
+                            borderWidth: 2,
+                            borderColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.borderLight,
+                            justifyContent: "center",
+                            alignItems: "center",
+                            backgroundColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.card,
+                            shadowColor: paymentMode === "UPI" ? theme.colors.primary : "#000",
+                            shadowOffset: { width: 0, height: 1 },
+                            shadowOpacity: paymentMode === "UPI" ? 0.3 : 0,
+                            shadowRadius: 2,
+                            elevation: paymentMode === "UPI" ? 2 : 0,
+                          }}
+                        >
+                          <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "UPI" ? "#ffffff" : theme.colors.textMuted }}>UPI</Text>
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {paymentMode === "UPI" && (
+                      <View style={{ alignItems: "center", marginVertical: 14, padding: 16, backgroundColor: "#ffffff", borderRadius: 12, borderWidth: 1.5, borderColor: theme.colors.borderLight, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 }}>
+                        {(!paymentConfig || (!paymentConfig.upiId && !paymentConfig.upiQrImageUrl)) ? (
+                          <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                            UPI payment is not configured.
+                          </Text>
+                        ) : (
+                          <>
+                            {/* Scan finder frame around QR code */}
+                            <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
+                              {paymentConfig.upiQrImageUrl ? (
+                                <Image source={{ uri: paymentConfig.upiQrImageUrl }} style={{ width: 130, height: 130 }} resizeMode="contain" />
+                              ) : paymentConfig.upiId ? (
+                                <QRCode
+                                  value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
+                                  size={130}
+                                />
+                              ) : null}
+                            </View>
+
+                            <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "600", textAlign: "center", paddingHorizontal: 10 }}>
+                              Scan to Pay {currencySymbol}{amount.toLocaleString("en-IN")}
+                            </Text>
+
+                            {paymentConfig.upiAccountName && (
+                              <Text style={{ fontSize: 11, color: theme.colors.text, marginTop: 4, fontWeight: "500", textAlign: "center" }}>
+                                Merchant: {paymentConfig.upiAccountName}
+                              </Text>
+                            )}
+
+                            {paymentConfig.upiId && (
+                              <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2, textAlign: "center" }}>
+                                UPI ID: {paymentConfig.upiId}
+                              </Text>
+                            )}
+
+                            <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 4, textAlign: "center", paddingHorizontal: 10 }}>
+                              Scan this QR using Google Pay, PhonePe, Paytm or any UPI app.
+                            </Text>
+                          </>
+                        )}
+
+                        {paymentConfig && (paymentConfig.upiId || paymentConfig.upiQrImageUrl) && (
+                          <View style={{ width: "100%", marginTop: 16, borderTopWidth: 1, borderColor: theme.colors.borderLight, paddingTop: 14 }}>
+                            <Text style={[styles.formLabel, { color: theme.colors.text, marginBottom: 8, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                              UPI Transaction ID (8-35 Characters)<Text style={{ color: theme.colors.danger }}> *</Text>
+                            </Text>
+                            <AppInput
+                              placeholder="Enter 12-digit transaction ID"
+                              value={transactionId}
+                              onChangeText={(val) => {
+                                setTransactionId(val);
+                                setTransactionIdError("");
+                              }}
+                              error={transactionIdError}
+                            />
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    <Pressable
+                      onPress={() => setPaymentConfirmed(!paymentConfirmed)}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 14, paddingHorizontal: 4 }}
+                    >
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 6,
+                          borderWidth: 2,
+                          borderColor: paymentConfirmed ? theme.colors.success : theme.colors.border,
+                          backgroundColor: paymentConfirmed ? theme.colors.success : theme.colors.card,
+                          justifyContent: "center",
+                          alignItems: "center",
+                        }}
+                      >
+                        {paymentConfirmed && (
+                          <CheckCircle size={14} color="#ffffff" />
+                        )}
+                      </View>
+                      <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600", flex: 1 }}>
+                        Confirm payment of {currencySymbol}{amount.toLocaleString("en-IN")} has been received.
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+
+                {/* Bottom Buttons */}
+                <View style={[styles.btnRow, { marginTop: 8 }]}>
+                  <AppButton title="Cancel" variant="outline" onPress={() => setCompleteFormVisible(false)} style={{ flex: 1 }} />
+                  <AppButton
+                    title={job?.status === "COMPLETED" ? "Submit Payment" : "Submit & Complete Job"}
+                    variant="success"
+                    onPress={handleStep3Submit}
+                    loading={submitting}
+                    style={{ flex: 1.8 }}
+                  />
+                </View>
+              </ScrollView>
+            </AppCard>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
       {/* Confirmation Dialog Modal */}
       {confirmVisible && confirmConfig && (
         <AppConfirmModal
@@ -961,7 +2306,13 @@ export const TechnicianJobDetailsScreen = () => {
         visible={successVisible}
         title={successTitle}
         message={successMessage}
-        onClose={() => setSuccessVisible(false)}
+        onClose={() => {
+          setSuccessVisible(false);
+          if (shouldNavigateHome) {
+            setShouldNavigateHome(false);
+            navigation.navigate("TechnicianHome");
+          }
+        }}
         autoCloseDelay={2000}
       />
       {/* App Alert Warning Modal */}
@@ -1066,21 +2417,36 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 8,
   },
-  reasonOption: {
-    borderWidth: 1,
-    padding: 12,
-    borderRadius: 8,
-  },
   photoGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12,
     marginVertical: 12,
   },
+  photoWrapper: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+  },
   photoThumbnail: {
     width: 80,
     height: 80,
     borderRadius: 8,
+  },
+  photoIndex: {
+    position: "absolute",
+    top: 4,
+    left: 4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoIndexText: {
+    color: "#ffffff",
+    fontSize: 9,
+    fontWeight: "700",
   },
   methodToggleRow: {
     flexDirection: "row",
@@ -1259,5 +2625,243 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     marginBottom: 14,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 16,
+  },
+  modalContent: {
+    width: "100%",
+    maxWidth: 360,
+    padding: 20,
+    borderRadius: 16,
+  },
+  bottomSheetContainer: {
+    width: "100%",
+    maxHeight: "90%",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    elevation: 5,
+    shadowColor: "#000000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: -4 },
+  },
+  bottomSheetHeader: {
+    padding: 16,
+    borderBottomWidth: 1,
+    alignItems: "center",
+    gap: 2,
+  },
+  signaturePad: {
+    height: 160,
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    borderRadius: 8,
+    marginVertical: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    position: "relative",
+    overflow: "hidden",
+  },
+  padPlaceholder: {
+    position: "absolute",
+    alignItems: "center",
+    gap: 4,
+  },
+  padPlaceholderText: {
+    fontSize: 12,
+  },
+  clearBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  padHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 12,
+  },
+  padLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  padLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  photoBtnRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginVertical: 12,
+  },
+  photoActionBtn: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 4,
+  },
+  photoActionLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  photoStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  reasonOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1.5,
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  reasonText: {
+    fontSize: 14,
+    flex: 1,
+  },
+  textAreaContainer: {
+    borderWidth: 1.5,
+    borderRadius: 8,
+    padding: 12,
+    minHeight: 90,
+  },
+  textArea: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlignVertical: "top",
+  },
+  addPhotoBtn: {
+    width: 80,
+    height: 80,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  padHint: {
+    fontSize: 11,
+    marginTop: 4,
+  },
+  amountContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 48,
+    gap: 8,
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  addExtraBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  addExtraBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  extraRowInput: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8,
+    alignItems: "center",
+  },
+  extraNameInput: {
+    flex: 1.5,
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    fontSize: 13,
+  },
+  extraAmountWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    gap: 4,
+  },
+  extraAmountInput: {
+    flex: 1,
+    fontSize: 13,
+  },
+  removeExtraBtn: {
+    padding: 6,
+  },
+  breakdownCard: {
+    padding: 12,
+    borderRadius: 8,
+  },
+  breakdownRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  breakdownLabel: {
+    fontSize: 12,
+  },
+  breakdownValue: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  totalLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  totalValue: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  modeRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 12,
+  },
+  modeBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    justifyContent: "center",
+    alignItems: "center",
   },
 });

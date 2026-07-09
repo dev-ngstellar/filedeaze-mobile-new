@@ -20,6 +20,7 @@ import { AppCard } from "../../components/AppCard";
 import { AppButton } from "../../components/AppButton";
 import { AppLoader } from "../../components/AppLoader";
 import { AppAlertModal } from "../../components/AppAlertModal";
+import { PaymentBreakdownCard } from "../../components/PaymentBreakdownCard";
 
 type RouteProps = RouteProp<TechnicianStackParamList, "InvoiceGenerate">;
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "InvoiceGenerate">;
@@ -41,7 +42,8 @@ export const InvoiceGenerateScreen = () => {
   const amount = initialAmount || job?.paymentCollection || 0;
   const paymentMethod = initialPaymentMethod || job?.paymentMethod || "CASH";
 
-  const percent = job?.gstPercent && job.gstPercent > 0 ? job.gstPercent : 18;
+  const gstEnabled = job ? !!job.gstEnabled : false;
+  const percent = gstEnabled ? (job?.gstPercent != null ? job.gstPercent : 18) : 0;
   const fallbackBase = Math.round((amount / (1 + percent / 100)) * 100) / 100;
   const fallbackGst = Math.round((amount - fallbackBase) * 100) / 100;
 
@@ -249,106 +251,22 @@ export const InvoiceGenerateScreen = () => {
         </View>
 
         {/* Invoice Bill Format Sheet */}
-        <AppCard style={[styles.invoiceSheet, { borderColor: theme.colors.border }]}>
-          {/* Header Branding */}
-          <View style={styles.invoiceHeader}>
-            <View>
-              <Text style={[styles.brandName, { color: theme.colors.primary }]}>FIELDEAZE</Text>
-              <Text style={[styles.brandSub, { color: theme.colors.textMuted }]}>Reliable On-Demand Services</Text>
-            </View>
-            <View style={[styles.paidBadge, { backgroundColor: `${theme.colors.success}15` }]}>
-              <Check size={14} color={theme.colors.success} style={{ marginRight: 4 }} />
-              <Text style={[styles.paidText, { color: theme.colors.success }]}>PAID</Text>
-            </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-          {/* Metadata Block */}
-          <View style={styles.metaBlock}>
-            <View style={styles.metaRow}>
-              <View>
-                <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>INVOICE NUMBER</Text>
-                <Text style={[styles.metaValue, { color: theme.colors.text }]}>#{invoiceNo}</Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>DATE</Text>
-                <Text style={[styles.metaValue, { color: theme.colors.text }]}>
-                  {invoiceDate}
-                </Text>
-              </View>
-            </View>
-
-            <View style={[styles.metaRow, { marginTop: 12 }]}>
-              <View>
-                <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>BILL TO (CUSTOMER)</Text>
-                <Text style={[styles.metaValue, { color: theme.colors.text }]}>{job?.customerName || "Customer"}</Text>
-                <Text style={[styles.metaValueSub, { color: theme.colors.textMuted }]}>{job?.customerMobile}</Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>PAYMENT METHOD</Text>
-                <Text style={[styles.metaValue, { color: theme.colors.text }]}>{paymentMethod}</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-          {/* Items Section */}
-          <Text style={[styles.sectionHeading, { color: theme.colors.textMuted }]}>SERVICE ITEMS</Text>
-          <View style={styles.itemRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.itemName, { color: theme.colors.text }]}>{job?.service || "General Service"}</Text>
-              <Text style={[styles.itemDesc, { color: theme.colors.textMuted }]} numberOfLines={1}>
-                {job?.category || "Maintenance"}
-              </Text>
-            </View>
-            <Text style={[styles.itemPrice, { color: theme.colors.text }]}>₹{displayBaseAmount.toLocaleString("en-IN")}</Text>
-          </View>
-
-          {sparesAmount > 0 && (
-            <View style={[styles.itemRow, { marginTop: 8 }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.itemName, { color: theme.colors.text }]}>Extra Charges / Spares</Text>
-                <Text style={[styles.itemDesc, { color: theme.colors.textMuted }]} numberOfLines={1}>
-                  Additional parts or services
-                </Text>
-              </View>
-              <Text style={[styles.itemPrice, { color: theme.colors.text }]}>₹{sparesAmount.toLocaleString("en-IN")}</Text>
-            </View>
-          )}
-
-          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-          {/* Totals Breakdown */}
-          <View style={styles.totalBlock}>
-            <View style={styles.totalRow}>
-              <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Base Service Charge</Text>
-              <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>Rs.{displayBaseAmount.toLocaleString("en-IN")}</Text>
-            </View>
-            {sparesAmount > 0 && (
-              <View style={[styles.totalRow, { marginTop: 6 }]}>
-                <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Extra Charges / Spares</Text>
-                <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>Rs.{sparesAmount.toLocaleString("en-IN")}</Text>
-              </View>
-            )}
-            {gstAmount > 0 && (
-              <View style={[styles.totalRow, { marginTop: 6 }]}>
-                <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>{gstLabel}</Text>
-                <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>Rs.{gstAmount.toLocaleString("en-IN")}</Text>
-              </View>
-            )}
-
-            <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
-
-            <View style={styles.totalRow}>
-              <Text style={{ fontSize: 15, fontWeight: "700", color: theme.colors.text }}>Total Paid</Text>
-              <Text style={{ fontSize: 18, fontWeight: "800", color: theme.colors.primary }}>
-                Rs.{totalAmount.toLocaleString("en-IN")}
-              </Text>
-            </View>
-          </View>
-        </AppCard>
+        <PaymentBreakdownCard
+          invoiceNo={invoiceNo}
+          ticketNo={ticketNo}
+          customerName={job?.customerName || "Customer"}
+          baseAmount={displayBaseAmount}
+          extraCharges={sparesAmount}
+          gstEnabled={gstPercent > 0}
+          gstPercent={gstPercent}
+          gstAmount={gstAmount}
+          totalAmount={totalAmount}
+          collectedAmount={totalAmount}
+          paymentMode={paymentMethod}
+          paymentStatus="Collected"
+          invoiceDate={invoiceDate}
+          currency="₹"
+        />
 
         {/* Invoice Action Options */}
         <View style={styles.actions}>
@@ -371,8 +289,8 @@ export const InvoiceGenerateScreen = () => {
           </View>
 
           <AppButton
-            title="Close & View Completed Jobs"
-            onPress={() => navigation.navigate("AssignedJobs", { initialTab: "COMPLETED" })}
+            title="Completed Ticket"
+            onPress={() => navigation.navigate("TechnicianHome")}
             variant="primary"
             size="lg"
             style={{ marginTop: 8 }}

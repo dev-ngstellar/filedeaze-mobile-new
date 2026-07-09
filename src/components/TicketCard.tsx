@@ -40,13 +40,13 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
   const getStatusColor = (status: TicketStatus) => {
     switch (status) {
       case "COMPLETED":
-      case "CLOSED":
+      case "TICKET_CLOSED":
       case "ACCEPTED":
         return theme.colors.success;
       case "IN_PROGRESS":
         return theme.colors.purple;
       case "TRAVELLING":
-      case "REACHED":
+      case "REACHED_LOCATION":
         return theme.colors.primary;
       case "PENDING":
       case "RESCHEDULED":
@@ -74,7 +74,7 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
 
   let isLocked = false;
   let lockMessage = "";
-  if (ticket.createdAt && (ticket.status === "ASSIGNED" || ticket.status === "PENDING" || ticket.status === "NEW")) {
+  if (ticket.createdAt && (ticket.status === "ASSIGNED" || ticket.status === "PENDING" || ticket.status === "NEW_TICKET")) {
     const raisedTime = new Date(ticket.createdAt).getTime();
     const currentTime = Date.now();
     const hoursDifference = (currentTime - raisedTime) / (1000 * 60 * 60);
@@ -95,32 +95,30 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
   // Determine CTA text based on status
   const ctaText = isLocked
     ? `Locked (Time Expired)`
-    : ticket.status === "ASSIGNED" || ticket.status === "NEW"
+    : ticket.status === "ASSIGNED" || ticket.status === "NEW_TICKET"
     ? "View Details"
     : ticket.status === "ACCEPTED"
     ? "Start Travel"
     : ticket.status === "TRAVELLING"
     ? "Mark Reached"
-    : ticket.status === "REACHED"
+    : ticket.status === "REACHED_LOCATION"
     ? "Start Job"
     : ticket.status === "IN_PROGRESS"
     ? "Update Status"
-    : ((ticket.status as string) === "INVOICE_GENERATED" || (ticket.status as string) === "CLOSED")
+    : ((ticket.status as string) === "INVOICE_GENERATED" || (ticket.status as string) === "TICKET_CLOSED")
     ? "View Invoice Details"
     : "View Details";
 
   return (
-    <Pressable
-      onPress={handlePress}
-      style={({ pressed }) => [
+    <View
+      style={[
         styles.cardContainer,
         {
           backgroundColor: theme.colors.card,
           shadowColor: theme.colors.shadow,
           borderColor: theme.colors.borderLight,
-          opacity: isLocked ? 0.6 : (pressed ? 0.95 : 1),
+          opacity: isLocked ? 0.6 : 1,
         },
-        pressed && !isLocked && styles.cardPressed,
         style,
       ]}
     >
@@ -173,7 +171,7 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
         ) : null}
 
         {/* Divider & Customer/Meta Rows - only displayed for accepted/active tickets */}
-        {ticket.status !== "ASSIGNED" && ticket.status !== "NEW" && (
+        {ticket.status !== "ASSIGNED" && ticket.status !== "NEW_TICKET" && (
           <>
             <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
 
@@ -227,10 +225,17 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
         )}
 
         {/* CTA Button */}
-        <View style={[styles.ctaContainer, { borderTopColor: theme.colors.borderLight }]}>
+        <Pressable
+          onPress={handlePress}
+          style={({ pressed }) => [
+            styles.ctaContainer,
+            { borderTopColor: theme.colors.borderLight },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
           <Text style={[styles.ctaText, { color: theme.colors.primary }]}>{ctaText}</Text>
           <ChevronRight size={16} color={theme.colors.primary} />
-        </View>
+        </Pressable>
       </View>
       <AppConfirmModal
         visible={modalVisible}
@@ -242,7 +247,7 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
         onConfirm={() => setModalVisible(false)}
         onCancel={() => setModalVisible(false)}
       />
-    </Pressable>
+    </View>
   );
 };
 
