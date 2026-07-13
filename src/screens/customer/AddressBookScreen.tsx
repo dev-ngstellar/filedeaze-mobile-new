@@ -32,9 +32,11 @@ type RouteProps = RouteProp<CustomerStackParamList, "AddressBook">;
 interface AddressFormState {
   id?: string;
   label: string;
-  addressText: string;
-  lat: string;
-  lng: string;
+  street: string;
+  city: string;
+  state: string;
+  country: string;
+  postalCode: string;
 }
 
 export const AddressBookScreen = () => {
@@ -51,9 +53,11 @@ export const AddressBookScreen = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [form, setForm] = useState<AddressFormState>({
     label: "",
-    addressText: "",
-    lat: "28.6139", // Default coordinates if needed
-    lng: "77.2090",
+    street: "",
+    city: "",
+    state: "",
+    country: "India",
+    postalCode: "",
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -61,21 +65,19 @@ export const AddressBookScreen = () => {
 
   const validate = (currentForm: AddressFormState) => {
     const newErrors: Record<string, string> = {};
-    if (!currentForm.label.trim()) newErrors.label = "Label is required";
-    if (!currentForm.addressText.trim()) newErrors.addressText = "Address text is required";
-    if (!currentForm.lat.trim()) newErrors.lat = "Latitude is required";
-    if (isNaN(Number(currentForm.lat))) newErrors.lat = "Latitude must be a valid number";
-    if (!currentForm.lng.trim()) newErrors.lng = "Longitude is required";
-    if (isNaN(Number(currentForm.lng))) newErrors.lng = "Longitude must be a valid number";
+    if (!currentForm.street.trim()) newErrors.street = "Street address is required.";
+    if (!currentForm.city.trim()) newErrors.city = "City is required.";
     return newErrors;
   };
 
   const handleOpenAdd = () => {
     setForm({
       label: "",
-      addressText: "",
-      lat: "28.6139",
-      lng: "77.2090",
+      street: "",
+      city: "",
+      state: "",
+      country: "India",
+      postalCode: "",
     });
     setErrors({});
     setSubmitAttempted(false);
@@ -86,9 +88,11 @@ export const AddressBookScreen = () => {
     setForm({
       id: item.id,
       label: item.label,
-      addressText: item.addressText,
-      lat: String(item.lat),
-      lng: String(item.lng),
+      street: item.street || "",
+      city: item.city || "",
+      state: item.state || "",
+      country: item.country || "India",
+      postalCode: item.postalCode || "",
     });
     setErrors({});
     setSubmitAttempted(false);
@@ -106,10 +110,12 @@ export const AddressBookScreen = () => {
 
     try {
       const payload = {
-        label: form.label,
-        addressText: form.addressText,
-        lat: Number(form.lat),
-        lng: Number(form.lng),
+        label: form.label.trim() || "Home",
+        street: form.street.trim(),
+        city: form.city.trim(),
+        state: form.state.trim() || undefined,
+        country: form.country.trim() || "India",
+        postalCode: form.postalCode.trim() || undefined,
       };
 
       if (form.id) {
@@ -147,7 +153,7 @@ export const AddressBookScreen = () => {
     );
   };
 
-  const isFormValid = !form.label.trim() || !form.addressText.trim() || !form.lat.trim() || !form.lng.trim();
+  const isFormValid = !form.street.trim() || !form.city.trim();
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -165,7 +171,7 @@ export const AddressBookScreen = () => {
               style={styles.addressCard}
               onPress={() => {
                 if (onSelectAddress) {
-                  onSelectAddress(item.addressText, item.lat, item.lng);
+                  onSelectAddress(item);
                   navigation.goBack();
                 }
               }}
@@ -188,15 +194,17 @@ export const AddressBookScreen = () => {
               </View>
 
               <Text style={[styles.addressText, { color: theme.colors.textMuted }]}>
-                {item.addressText}
+                {item.street}
               </Text>
-
-              <View style={styles.coordsRow}>
-                <Map size={12} color={theme.colors.textLight} />
-                <Text style={[styles.coordsText, { color: theme.colors.textLight }]}>
-                  Lat: {item.lat}, Lng: {item.lng}
+              <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: -6, marginBottom: 8 }}>
+                {[item.city, item.state].filter(Boolean).join(", ")}
+                {item.postalCode ? ` - ${item.postalCode}` : ""}
+              </Text>
+              {item.country ? (
+                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>
+                  {item.country}
                 </Text>
-              </View>
+              ) : null}
             </AppCard>
           )}
           ListEmptyComponent={
@@ -239,82 +247,82 @@ export const AddressBookScreen = () => {
             <ScrollView contentContainerStyle={styles.modalForm}>
               {/* Label Field */}
               <View style={styles.fieldContainer}>
-                <View style={styles.labelRow}>
-                  <Text style={[styles.formLabel, { color: theme.colors.textMuted }]}>Label</Text>
-                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-                </View>
+                <Text style={[styles.formLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Address Label</Text>
                 <AppInput
-                  placeholder="e.g. Home, Office, Parents"
+                  placeholder="e.g. Home, Office"
                   value={form.label}
-                  onChangeText={(val) => {
-                    setForm((prev) => ({ ...prev, label: val }));
-                    if (errors.label) setErrors((prev) => ({ ...prev, label: "" }));
-                  }}
+                  onChangeText={(val) => setForm((prev) => ({ ...prev, label: val }))}
                 />
-                {submitAttempted && errors.label ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.label}</Text>
-                ) : null}
               </View>
 
-              {/* Address Text Field */}
+              {/* Street Address Field */}
               <View style={styles.fieldContainer}>
                 <View style={styles.labelRow}>
-                  <Text style={[styles.formLabel, { color: theme.colors.textMuted }]}>Address Text</Text>
+                  <Text style={[styles.formLabel, { color: theme.colors.textMuted }]}>Street Address</Text>
                   <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
                 </View>
                 <AppInput
-                  placeholder="Enter full address details"
-                  value={form.addressText}
+                  placeholder="Enter street address"
+                  value={form.street}
                   onChangeText={(val) => {
-                    setForm((prev) => ({ ...prev, addressText: val }));
-                    if (errors.addressText) setErrors((prev) => ({ ...prev, addressText: "" }));
+                    setForm((prev) => ({ ...prev, street: val }));
+                    if (errors.street) setErrors((prev) => ({ ...prev, street: "" }));
                   }}
                   multiline
                   numberOfLines={3}
                 />
-                {submitAttempted && errors.addressText ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.addressText}</Text>
+                {submitAttempted && errors.street ? (
+                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.street}</Text>
                 ) : null}
               </View>
 
-              {/* Latitude Field */}
+              {/* City Field */}
               <View style={styles.fieldContainer}>
                 <View style={styles.labelRow}>
-                  <Text style={[styles.formLabel, { color: theme.colors.textMuted }]}>Latitude</Text>
+                  <Text style={[styles.formLabel, { color: theme.colors.textMuted }]}>City</Text>
                   <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
                 </View>
                 <AppInput
-                  placeholder="e.g. 28.6139"
-                  value={form.lat}
+                  placeholder="Enter city"
+                  value={form.city}
                   onChangeText={(val) => {
-                    setForm((prev) => ({ ...prev, lat: val }));
-                    if (errors.lat) setErrors((prev) => ({ ...prev, lat: "" }));
+                    setForm((prev) => ({ ...prev, city: val }));
+                    if (errors.city) setErrors((prev) => ({ ...prev, city: "" }));
                   }}
-                  keyboardType="numeric"
                 />
-                {submitAttempted && errors.lat ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.lat}</Text>
+                {submitAttempted && errors.city ? (
+                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.city}</Text>
                 ) : null}
               </View>
 
-              {/* Longitude Field */}
+              {/* State Field */}
               <View style={styles.fieldContainer}>
-                <View style={styles.labelRow}>
-                  <Text style={[styles.formLabel, { color: theme.colors.textMuted }]}>Longitude</Text>
-                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-                </View>
+                <Text style={[styles.formLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>State</Text>
                 <AppInput
-                  placeholder="e.g. 77.2090"
-                  value={form.lng}
-                  onChangeText={(val) => {
-                    setForm((prev) => ({ ...prev, lng: val }));
-                    if (errors.lng) setErrors((prev) => ({ ...prev, lng: "" }));
-                  }}
-                  keyboardType="numeric"
+                  placeholder="Enter state"
+                  value={form.state}
+                  onChangeText={(val) => setForm((prev) => ({ ...prev, state: val }))}
                 />
-                {submitAttempted && errors.lng ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.lng}</Text>
-                ) : null}
+              </View>
+
+              {/* Country Field */}
+              <View style={styles.fieldContainer}>
+                <Text style={[styles.formLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Country</Text>
+                <AppInput
+                  placeholder="Enter country"
+                  value={form.country}
+                  onChangeText={(val) => setForm((prev) => ({ ...prev, country: val }))}
+                />
+              </View>
+
+              {/* Postal Code Field */}
+              <View style={styles.fieldContainer}>
+                <Text style={[styles.formLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Postal Code</Text>
+                <AppInput
+                  placeholder="Enter postal code"
+                  value={form.postalCode}
+                  onChangeText={(val) => setForm((prev) => ({ ...prev, postalCode: val }))}
+                />
               </View>
 
               <AppButton

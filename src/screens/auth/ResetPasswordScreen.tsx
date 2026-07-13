@@ -14,7 +14,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Lock, ArrowLeft, KeyRound } from "lucide-react-native";
+import { Lock, ArrowLeft, KeyRound, Eye, EyeOff } from "lucide-react-native";
 
 import { useTheme } from "../../theme";
 import AuthService from "../../services/auth.service";
@@ -35,14 +35,19 @@ export const ResetPasswordScreen = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const { token: routeToken = "", email = "" } = route.params || {};
 
   const {
     control,
     handleSubmit,
     setValue,
+    watch,
     formState: { errors },
   } = useForm<ResetPasswordInput>({
+    mode: "onChange",
     resolver: zodResolver(resetPasswordSchema),
     defaultValues: {
       token: routeToken,
@@ -50,6 +55,18 @@ export const ResetPasswordScreen = () => {
       confirmPassword: "",
     },
   });
+
+  const passwordVal = watch("password");
+  const confirmPasswordVal = watch("confirmPassword");
+
+  const isButtonDisabled =
+    loading ||
+    !passwordVal ||
+    passwordVal.trim() === "" ||
+    !confirmPasswordVal ||
+    confirmPasswordVal.trim() === "" ||
+    passwordVal !== confirmPasswordVal ||
+    passwordVal.length < 8;
 
   useEffect(() => {
     if (routeToken) {
@@ -69,10 +86,17 @@ export const ResetPasswordScreen = () => {
       console.log("Navigation Triggered");
       console.log("Route Found: Login");
       
-      navigation.reset({
-        index: 0,
-        routes: [{ name: "Login", params: { email, successBanner: true } }],
-      });
+      Alert.alert("Success", "Password reset successfully.", [
+        {
+          text: "OK",
+          onPress: () => {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: "Login", params: { email, successBanner: true } }],
+            });
+          },
+        },
+      ]);
     } catch (err: any) {
       console.error("Reset Password API Exception:", err);
       setLoading(false);
@@ -122,10 +146,19 @@ export const ResetPasswordScreen = () => {
                 value={value}
                 onBlur={onBlur}
                 onChangeText={onChange}
-                secureTextEntry
+                secureTextEntry={!showPassword}
                 error={errors.password?.message}
                 autoCapitalize="none"
                 leftIcon={<Lock size={20} color={theme.colors.textLight} />}
+                rightIcon={
+                  <Pressable onPress={() => setShowPassword(!showPassword)} style={{ padding: 4 }}>
+                    {showPassword ? (
+                      <EyeOff size={20} color={theme.colors.textMuted} />
+                    ) : (
+                      <Eye size={20} color={theme.colors.textMuted} />
+                    )}
+                  </Pressable>
+                }
               />
             )}
           />
@@ -140,10 +173,19 @@ export const ResetPasswordScreen = () => {
                 value={value}
                 onBlur={onBlur}
                 onChangeText={onChange}
-                secureTextEntry
+                secureTextEntry={!showConfirmPassword}
                 error={errors.confirmPassword?.message}
                 autoCapitalize="none"
                 leftIcon={<Lock size={20} color={theme.colors.textLight} />}
+                rightIcon={
+                  <Pressable onPress={() => setShowConfirmPassword(!showConfirmPassword)} style={{ padding: 4 }}>
+                    {showConfirmPassword ? (
+                      <EyeOff size={20} color={theme.colors.textMuted} />
+                    ) : (
+                      <Eye size={20} color={theme.colors.textMuted} />
+                    )}
+                  </Pressable>
+                }
               />
             )}
           />
@@ -152,6 +194,7 @@ export const ResetPasswordScreen = () => {
             title="Reset Password"
             onPress={handleSubmit(onSubmit)}
             loading={loading}
+            disabled={isButtonDisabled}
             style={{ marginTop: 16 }}
           />
         </AppCard>

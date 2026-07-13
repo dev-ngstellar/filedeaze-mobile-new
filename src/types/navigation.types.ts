@@ -14,6 +14,8 @@ export type AuthStackParamList = {
   };
 };
 
+import { Address } from "../services/customer.service";
+
 export type CustomerStackParamList = {
   PostLoginSplash: undefined;
   CustomerHome: undefined;
@@ -27,7 +29,7 @@ export type CustomerStackParamList = {
   InvoiceList: undefined;
   InvoiceDetails: { invoiceId: string };
   Feedback: { ticketId: string; ticketNumber: string };
-  AddressBook: { onSelectAddress?: (addressText: string, lat: number, lng: number) => void } | undefined;
+  AddressBook: { onSelectAddress?: (address: Address) => void } | undefined;
   NotificationList: undefined;
 };
 

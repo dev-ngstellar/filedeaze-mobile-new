@@ -5,9 +5,11 @@ import { APP_CONFIG } from "../config/app.config";
 export interface Address {
   id: string;
   label: string;
-  addressText: string;
-  lat: number;
-  lng: number;
+  street: string;
+  city: string;
+  state?: string;
+  country?: string;
+  postalCode?: string;
   isActive: boolean;
 }
 
@@ -281,10 +283,10 @@ export const CustomerService = {
   getCategoryDetails: (id: string): Promise<any> =>
     apiClient.get(`/mobile/customer/catalog/categories/${id}`).then((r) => r.data.data),
 
-  addAddress: (payload: { label: string; addressText: string; lat: number; lng: number }): Promise<Address> =>
+  addAddress: (payload: { label: string; street: string; city: string; state?: string; country?: string; postalCode?: string }): Promise<Address> =>
     apiClient.post("/mobile/customer/addresses", payload).then((r) => r.data.data),
 
-  updateAddress: (id: string, payload: { label?: string; addressText?: string; lat?: number; lng?: number }): Promise<Address> =>
+  updateAddress: (id: string, payload: { label?: string; street?: string; city?: string; state?: string; country?: string; postalCode?: string; isActive?: boolean }): Promise<Address> =>
     apiClient.patch(`/mobile/customer/addresses/${id}`, payload).then((r) => r.data.data),
 
   deleteAddress: (id: string): Promise<any> =>

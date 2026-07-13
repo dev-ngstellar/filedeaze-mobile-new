@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -51,7 +51,9 @@ import {
   useAddCustomerAddress,
   useUpdateCustomerAddress,
   useDeleteCustomerAddress,
+  useCustomerProfile,
 } from "../../hooks/useCustomer";
+import { Address } from "../../services/customer.service";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
 import { AppButton } from "../../components/AppButton";
@@ -177,6 +179,7 @@ export const RaiseTicketScreen = () => {
   const addAddressMutation = useAddCustomerAddress();
   const updateAddressMutation = useUpdateCustomerAddress();
   const deleteAddressMutation = useDeleteCustomerAddress();
+  const { data: profile } = useCustomerProfile();
 
   // Form states
   const [selectedCat, setSelectedCat] = useState<any>(categoryId ? { id: categoryId, name: categoryName } : null);
@@ -184,7 +187,7 @@ export const RaiseTicketScreen = () => {
   const [description, setDescription] = useState("");
   const [preferredDate, setPreferredDate] = useState<Date | null>(null);
   const [preferredTimeSlot, setPreferredTimeSlot] = useState("");
-  const [address, setAddress] = useState("");
+  const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
   const [images, setImages] = useState<{ uri: string; type: "image" | "video" }[]>([]);
   const [imageNotes, setImageNotes] = useState("");
 
@@ -194,10 +197,54 @@ export const RaiseTicketScreen = () => {
   const [addressForm, setAddressForm] = useState<any>({
     id: undefined,
     label: "",
-    addressText: "",
+    street: "",
+    city: "",
+    state: "",
+    country: "India",
+    postalCode: "",
   });
   const [addressFormErrors, setAddressFormErrors] = useState<Record<string, string>>({});
   const [addressSubmitAttempted, setAddressSubmitAttempted] = useState(false);
+
+  // Address formatting helper
+  const formatFullAddress = (addr: Address) => {
+    const line1 = addr.street ? addr.street.trim() : "";
+    
+    const cityStateZipParts = [];
+    if (addr.city) cityStateZipParts.push(addr.city.trim());
+    if (addr.state) cityStateZipParts.push(addr.state.trim());
+    const cityState = cityStateZipParts.join(", ");
+    const zip = addr.postalCode ? addr.postalCode.trim() : "";
+    const line2 = cityState && zip ? `${cityState} - ${zip}` : cityState || zip;
+    
+    const line3 = addr.country ? addr.country.trim() : "";
+    
+    return [line1, line2, line3].filter(Boolean).join("\n");
+  };
+
+  // Set default address or profile fallback
+  useEffect(() => {
+    if (isLoadingAddresses) return;
+    
+    if (addresses && addresses.length > 0) {
+      if (!selectedAddress) {
+        setSelectedAddress(addresses[0]);
+      }
+    } else if (profile) {
+      if (!selectedAddress && profile.address) {
+        setSelectedAddress({
+          id: "profile",
+          label: "Profile Address",
+          street: profile.address,
+          city: profile.city || "",
+          state: "",
+          country: "India",
+          postalCode: profile.pincode || "",
+          isActive: true,
+        });
+      }
+    }
+  }, [addresses, isLoadingAddresses, profile]);
 
   // Subcategories fetched dynamically based on selected Category
   // The catalog endpoint returns { subCategories: [...with serviceCharges] }
@@ -372,7 +419,7 @@ export const RaiseTicketScreen = () => {
         newErrors.preferredDate = "Bookings can only be scheduled from tomorrow onwards.";
       }
     }
-    if (!address.trim()) newErrors.address = "Address is required";
+    if (!selectedAddress) newErrors.address = "Address is required";
     if (images.length === 0) newErrors.images = "At least 1 photo or video is required";
     return newErrors;
   };
@@ -465,7 +512,11 @@ export const RaiseTicketScreen = () => {
     setAddressForm({
       id: undefined,
       label: "",
-      addressText: "",
+      street: "",
+      city: "",
+      state: "",
+      country: "India",
+      postalCode: "",
     });
     setAddressFormErrors({});
     setAddressSubmitAttempted(false);
@@ -476,7 +527,11 @@ export const RaiseTicketScreen = () => {
     setAddressForm({
       id: item.id,
       label: item.label,
-      addressText: item.addressText,
+      street: item.street || "",
+      city: item.city || "",
+      state: item.state || "",
+      country: item.country || "India",
+      postalCode: item.postalCode || "",
     });
     setAddressFormErrors({});
     setAddressSubmitAttempted(false);
@@ -486,27 +541,40 @@ export const RaiseTicketScreen = () => {
   const handleSaveAddress = async () => {
     setAddressSubmitAttempted(true);
     const newErrors: Record<string, string> = {};
-    if (!addressForm.label.trim()) newErrors.label = "Label is required";
-    if (!addressForm.addressText.trim()) newErrors.addressText = "Address is required";
+    if (!addressForm.street.trim()) newErrors.street = "Street address is required.";
+    if (!addressForm.city.trim()) newErrors.city = "City is required.";
     setAddressFormErrors(newErrors);
 
     if (Object.keys(newErrors).length > 0) return;
 
     try {
       const payload = {
-        label: addressForm.label,
-        addressText: addressForm.addressText,
-        lat: 28.6139, // System calculated/fallback
-        lng: 77.2090, // System calculated/fallback
+        label: addressForm.label.trim() || "Home",
+        street: addressForm.street.trim(),
+        city: addressForm.city.trim(),
+        state: addressForm.state.trim() || undefined,
+        country: addressForm.country.trim() || "India",
+        postalCode: addressForm.postalCode.trim() || undefined,
       };
 
+      let saved: Address;
       if (addressForm.id) {
-        await updateAddressMutation.mutateAsync({ id: addressForm.id, payload });
+        saved = await updateAddressMutation.mutateAsync({ id: addressForm.id, payload });
       } else {
-        await addAddressMutation.mutateAsync(payload);
+        saved = await addAddressMutation.mutateAsync(payload);
       }
-      refetchAddresses();
+      
+      const res = await refetchAddresses();
       setAddressFormVisible(false);
+      setAddressBookVisible(false);
+      triggerPopup("success", "Success", "Address saved successfully.");
+
+      if (res.data) {
+        const found = res.data.find((a) => a.id === saved.id) || saved;
+        setSelectedAddress(found);
+      } else {
+        setSelectedAddress(saved);
+      }
     } catch (error: any) {
       triggerPopup("danger", "Address Error", error?.message || "Failed to save address");
     }
@@ -516,6 +584,9 @@ export const RaiseTicketScreen = () => {
     try {
       await deleteAddressMutation.mutateAsync(id);
       refetchAddresses();
+      if (selectedAddress?.id === id) {
+        setSelectedAddress(null);
+      }
     } catch (error: any) {
       triggerPopup("danger", "Address Error", error?.message || "Failed to delete address");
     }
@@ -543,7 +614,18 @@ export const RaiseTicketScreen = () => {
       formData.append("description", imageNotes
         ? `${description}\n\nImage Notes: ${imageNotes}`
         : description);
-      formData.append("serviceAddress", address);
+      const serviceAddress = selectedAddress
+        ? [
+            selectedAddress.street,
+            selectedAddress.city,
+            selectedAddress.state,
+            selectedAddress.postalCode,
+            selectedAddress.country,
+          ]
+            .filter(Boolean)
+            .join(", ")
+        : "";
+      formData.append("serviceAddress", serviceAddress);
       formData.append("priority", "MEDIUM");
 
       // ── Optional: scheduled date/time ────────────────────────────
@@ -633,7 +715,7 @@ export const RaiseTicketScreen = () => {
     !description.trim() ||
     !preferredDate ||
     !preferredTimeSlot ||
-    !address.trim() ||
+    !selectedAddress ||
     images.length === 0;
 
   return (
@@ -1015,31 +1097,59 @@ export const RaiseTicketScreen = () => {
               <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Service Address</Text>
               <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
             </View>
-            <AppInput
-              placeholder="Enter full location address details..."
-              value={address}
-              onChangeText={(val) => {
-                setAddress(val);
-                if (errors.address) setErrors((prev) => ({ ...prev, address: "" }));
-              }}
-              multiline
-              numberOfLines={3}
-              onFocus={() => setSubModalVisible(false)}
-            />
-            <Pressable
-              style={[styles.addressBookBtnFull, { backgroundColor: `${theme.colors.primary}08`, borderColor: `${theme.colors.primary}40` }]}
-              onPress={() => {
-                setSubModalVisible(false);
-                handleOpenAddressBook();
-              }}
-            >
-              <MapPin size={16} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: "700", marginLeft: 8 }}>
-                Pick from Address Book
-              </Text>
-            </Pressable>
+
+            {selectedAddress ? (
+              <View style={{ alignItems: "center", width: "100%", marginVertical: 10 }}>
+                <AppCard
+                  style={{
+                    width: "100%",
+                    padding: 16,
+                    borderWidth: 1.5,
+                    borderColor: theme.colors.borderLight,
+                    backgroundColor: `${theme.colors.primary}04`,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.primary, marginBottom: 6, textTransform: "capitalize" }}>
+                    {selectedAddress.label}
+                  </Text>
+                  <Text style={{ fontSize: 13, color: theme.colors.text, lineHeight: 20, textAlign: "center" }}>
+                    {formatFullAddress(selectedAddress)}
+                  </Text>
+                </AppCard>
+              </View>
+            ) : (
+              <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: "italic" }}>
+                  No address selected. Please add or select an address.
+                </Text>
+              </View>
+            )}
+
+            <View style={{ flexDirection: "row", justifyContent: "center", gap: 12, marginTop: 10 }}>
+              <AppButton
+                title="Change Address"
+                variant="outline"
+                onPress={() => {
+                  setSubModalVisible(false);
+                  handleOpenAddressBook();
+                }}
+                style={{ flex: 1, height: 44 }}
+              />
+              <AppButton
+                title="Add New Address"
+                onPress={() => {
+                  setSubModalVisible(false);
+                  handleOpenAddAddress();
+                }}
+                style={{ flex: 1, height: 44 }}
+              />
+            </View>
             {submitAttempted && errors.address ? (
-              <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.address}</Text>
+              <Text style={[styles.errorText, { color: theme.colors.danger, textAlign: "center", marginTop: 8 }]}>
+                {errors.address}
+              </Text>
             ) : null}
           </View>
         </AppCard>
@@ -1510,9 +1620,9 @@ export const RaiseTicketScreen = () => {
       </Modal>
 
       {/* Custom Address Book Modal */}
-      <Modal visible={addressBookVisible} transparent animationType="slide" onRequestClose={() => setAddressBookVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.card, maxHeight: "80%", paddingBottom: 24 }]}>
+      <Modal visible={addressBookVisible} transparent animationType="fade" onRequestClose={() => setAddressBookVisible(false)}>
+        <View style={styles.centeredModalOverlay}>
+          <View style={[styles.centeredModalContent, { backgroundColor: theme.colors.card, maxHeight: "80%" }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Address Book</Text>
               <Pressable onPress={() => setAddressBookVisible(false)}>
@@ -1528,36 +1638,59 @@ export const RaiseTicketScreen = () => {
                   data={addresses}
                   keyExtractor={(item) => item.id}
                   contentContainerStyle={{ paddingBottom: 60 }}
-                  renderItem={({ item }) => (
-                    <AppCard
-                      style={{ marginBottom: 12, padding: 14, borderWidth: 1.5, borderColor: theme.colors.borderLight }}
-                      onPress={() => {
-                        setAddress(item.addressText);
-                        if (errors.address) setErrors((prev) => ({ ...prev, address: "" }));
-                        setAddressBookVisible(false);
-                      }}
-                    >
-                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                          <MapPin size={16} color={theme.colors.primary} />
-                          <Text style={{ fontSize: 14, fontWeight: "700", textTransform: "capitalize", color: theme.colors.text }}>
-                            {item.label}
+                  renderItem={({ item }) => {
+                    const isSelected = selectedAddress?.id === item.id;
+                    return (
+                      <AppCard
+                        style={{
+                          marginBottom: 12,
+                          padding: 14,
+                          borderWidth: 1.5,
+                          borderColor: isSelected ? theme.colors.primary : theme.colors.borderLight,
+                          backgroundColor: isSelected ? `${theme.colors.primary}08` : theme.colors.card
+                        }}
+                        onPress={() => {
+                          setSelectedAddress(item);
+                          if (errors.address) setErrors((prev) => ({ ...prev, address: "" }));
+                          setAddressBookVisible(false);
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                            <MapPin size={16} color={isSelected ? theme.colors.primary : theme.colors.textMuted} />
+                            <Text style={{ fontSize: 14, fontWeight: "700", textTransform: "capitalize", color: theme.colors.text }}>
+                              {item.label}
+                            </Text>
+                            {isSelected && (
+                              <View style={{ backgroundColor: theme.colors.primary, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                <Text style={{ color: "#ffffff", fontSize: 9, fontWeight: "700" }}>Selected</Text>
+                              </View>
+                            )}
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                            <Pressable onPress={() => handleOpenEditAddress(item)} style={{ padding: 4 }}>
+                              <Edit2 size={16} color={theme.colors.textMuted} />
+                            </Pressable>
+                            <Pressable onPress={() => handleDeleteAddress(item.id)} style={{ padding: 4 }}>
+                              <Trash2 size={16} color={theme.colors.danger} />
+                            </Pressable>
+                          </View>
+                        </View>
+                        <Text style={{ fontSize: 13, color: theme.colors.textMuted, lineHeight: 18 }}>
+                          {item.street}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                          {[item.city, item.state].filter(Boolean).join(", ")}
+                          {item.postalCode ? ` - ${item.postalCode}` : ""}
+                        </Text>
+                        {item.country && (
+                          <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                            {item.country}
                           </Text>
-                        </View>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                          <Pressable onPress={() => handleOpenEditAddress(item)} style={{ padding: 4 }}>
-                            <Edit2 size={16} color={theme.colors.textMuted} />
-                          </Pressable>
-                          <Pressable onPress={() => handleDeleteAddress(item.id)} style={{ padding: 4 }}>
-                            <Trash2 size={16} color={theme.colors.danger} />
-                          </Pressable>
-                        </View>
-                      </View>
-                      <Text style={{ fontSize: 13, color: theme.colors.textMuted, lineHeight: 18 }}>
-                        {item.addressText}
-                      </Text>
-                    </AppCard>
-                  )}
+                        )}
+                      </AppCard>
+                    );
+                  }}
                   ListEmptyComponent={
                     <View style={{ paddingVertical: 40, alignItems: "center", gap: 10 }}>
                       <MapPin size={40} color={theme.colors.textLight} />
@@ -1566,7 +1699,7 @@ export const RaiseTicketScreen = () => {
                   }
                 />
               )}
-              <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingHorizontal: 16, backgroundColor: theme.colors.card }}>
+              <View style={{ paddingVertical: 12, borderTopWidth: 1, borderTopColor: theme.colors.borderLight }}>
                 <AppButton
                   title="Add New Address"
                   onPress={handleOpenAddAddress}
@@ -1593,51 +1726,100 @@ export const RaiseTicketScreen = () => {
 
             <ScrollView contentContainerStyle={{ padding: 16 }}>
               {/* Label Field */}
-              <View style={{ marginBottom: 16 }}>
-                <View style={styles.labelRow}>
-                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Label</Text>
-                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-                </View>
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Address Label</Text>
                 <AppInput
-                  placeholder="e.g. Home, Office, Parents"
+                  placeholder="e.g. Home, Office"
                   value={addressForm.label}
-                  onChangeText={(val) => {
-                    setAddressForm((prev: any) => ({ ...prev, label: val }));
-                    if (addressFormErrors.label) setAddressFormErrors((prev) => ({ ...prev, label: "" }));
-                  }}
+                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, label: val }))}
                 />
-                {addressSubmitAttempted && addressFormErrors.label ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{addressFormErrors.label}</Text>
-                ) : null}
               </View>
 
-              {/* Address Text Field */}
-              <View style={{ marginBottom: 20 }}>
+              {/* Street Address Field */}
+              <View style={{ marginBottom: 12 }}>
                 <View style={styles.labelRow}>
-                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Address Text</Text>
+                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Street Address</Text>
                   <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
                 </View>
                 <AppInput
-                  placeholder="Enter full address details"
-                  value={addressForm.addressText}
+                  placeholder="Enter street address"
+                  value={addressForm.street}
                   onChangeText={(val) => {
-                    setAddressForm((prev: any) => ({ ...prev, addressText: val }));
-                    if (addressFormErrors.addressText) setAddressFormErrors((prev) => ({ ...prev, addressText: "" }));
+                    setAddressForm((prev: any) => ({ ...prev, street: val }));
+                    if (addressFormErrors.street) setAddressFormErrors((prev) => ({ ...prev, street: "" }));
                   }}
                   multiline
                   numberOfLines={3}
                 />
-                {addressSubmitAttempted && addressFormErrors.addressText ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{addressFormErrors.addressText}</Text>
+                {addressSubmitAttempted && addressFormErrors.street ? (
+                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{addressFormErrors.street}</Text>
                 ) : null}
               </View>
 
-              <AppButton
-                title={addressForm.id ? "Update Address" : "Save Address"}
-                onPress={handleSaveAddress}
-                disabled={!addressForm.label.trim() || !addressForm.addressText.trim()}
-                loading={addAddressMutation.isPending || updateAddressMutation.isPending}
-              />
+              {/* City Field */}
+              <View style={{ marginBottom: 12 }}>
+                <View style={styles.labelRow}>
+                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>City</Text>
+                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
+                </View>
+                <AppInput
+                  placeholder="Enter city"
+                  value={addressForm.city}
+                  onChangeText={(val) => {
+                    setAddressForm((prev: any) => ({ ...prev, city: val }));
+                    if (addressFormErrors.city) setAddressFormErrors((prev) => ({ ...prev, city: "" }));
+                  }}
+                />
+                {addressSubmitAttempted && addressFormErrors.city ? (
+                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{addressFormErrors.city}</Text>
+                ) : null}
+              </View>
+
+              {/* State Field */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>State</Text>
+                <AppInput
+                  placeholder="Enter state"
+                  value={addressForm.state}
+                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, state: val }))}
+                />
+              </View>
+
+              {/* Country Field */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Country</Text>
+                <AppInput
+                  placeholder="Enter country"
+                  value={addressForm.country}
+                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, country: val }))}
+                />
+              </View>
+
+              {/* Postal Code Field */}
+              <View style={{ marginBottom: 16 }}>
+                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Postal Code</Text>
+                <AppInput
+                  placeholder="Enter postal code"
+                  value={addressForm.postalCode}
+                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, postalCode: val }))}
+                />
+              </View>
+
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
+                <AppButton
+                  title="Cancel"
+                  variant="outline"
+                  onPress={() => setAddressFormVisible(false)}
+                  style={{ flex: 1 }}
+                />
+                <AppButton
+                  title={addressForm.id ? "Update" : "Save"}
+                  onPress={handleSaveAddress}
+                  disabled={!addressForm.street.trim() || !addressForm.city.trim()}
+                  loading={addAddressMutation.isPending || updateAddressMutation.isPending}
+                  style={{ flex: 1 }}
+                />
+              </View>
             </ScrollView>
           </View>
         </View>

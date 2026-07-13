@@ -152,7 +152,7 @@ export function useCustomerAddresses() {
 export function useAddCustomerAddress() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { label: string; addressText: string; lat: number; lng: number }) =>
+    mutationFn: (payload: { label: string; street: string; city: string; state?: string; country?: string; postalCode?: string }) =>
       CustomerService.addAddress(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: customerKeys.addresses() });
@@ -163,7 +163,7 @@ export function useAddCustomerAddress() {
 export function useUpdateCustomerAddress() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: { label?: string; addressText?: string; lat?: number; lng?: number } }) =>
+    mutationFn: ({ id, payload }: { id: string; payload: { label?: string; street?: string; city?: string; state?: string; country?: string; postalCode?: string; isActive?: boolean } }) =>
       CustomerService.updateAddress(id, payload),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: customerKeys.addresses() });
