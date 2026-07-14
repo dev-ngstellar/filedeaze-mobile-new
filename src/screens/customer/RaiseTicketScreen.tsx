@@ -39,6 +39,7 @@ import {
   Trash2,
   Map,
   Play,
+  Home,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -209,42 +210,38 @@ export const RaiseTicketScreen = () => {
   // Address formatting helper
   const formatFullAddress = (addr: Address) => {
     const line1 = addr.street ? addr.street.trim() : "";
-    
+
     const cityStateZipParts = [];
     if (addr.city) cityStateZipParts.push(addr.city.trim());
     if (addr.state) cityStateZipParts.push(addr.state.trim());
     const cityState = cityStateZipParts.join(", ");
     const zip = addr.postalCode ? addr.postalCode.trim() : "";
     const line2 = cityState && zip ? `${cityState} - ${zip}` : cityState || zip;
-    
+
     const line3 = addr.country ? addr.country.trim() : "";
-    
+
     return [line1, line2, line3].filter(Boolean).join("\n");
   };
 
-  // Set default address or profile fallback
+  // Set default profile address and keep it synced if profile updates
   useEffect(() => {
-    if (isLoadingAddresses) return;
-    
-    if (addresses && addresses.length > 0) {
-      if (!selectedAddress) {
-        setSelectedAddress(addresses[0]);
-      }
-    } else if (profile) {
-      if (!selectedAddress && profile.address) {
-        setSelectedAddress({
-          id: "profile",
-          label: "Profile Address",
-          street: profile.address,
-          city: profile.city || "",
-          state: "",
-          country: "India",
-          postalCode: profile.pincode || "",
-          isActive: true,
-        });
+    if (profile && profile.address) {
+      const profileAddr = {
+        id: "profile",
+        label: "Profile Address",
+        street: profile.address,
+        city: profile.city || "",
+        state: "",
+        country: "India",
+        postalCode: profile.pincode || "",
+        isActive: true,
+      };
+      
+      if (!selectedAddress || selectedAddress.id === "profile") {
+        setSelectedAddress(profileAddr);
       }
     }
-  }, [addresses, isLoadingAddresses, profile]);
+  }, [profile]);
 
   // Subcategories fetched dynamically based on selected Category
   // The catalog endpoint returns { subCategories: [...with serviceCharges] }
@@ -520,6 +517,7 @@ export const RaiseTicketScreen = () => {
     });
     setAddressFormErrors({});
     setAddressSubmitAttempted(false);
+    setAddressBookVisible(false);
     setAddressFormVisible(true);
   };
 
@@ -535,6 +533,7 @@ export const RaiseTicketScreen = () => {
     });
     setAddressFormErrors({});
     setAddressSubmitAttempted(false);
+    setAddressBookVisible(false);
     setAddressFormVisible(true);
   };
 
@@ -563,18 +562,13 @@ export const RaiseTicketScreen = () => {
       } else {
         saved = await addAddressMutation.mutateAsync(payload);
       }
-      
+
       const res = await refetchAddresses();
       setAddressFormVisible(false);
-      setAddressBookVisible(false);
-      triggerPopup("success", "Success", "Address saved successfully.");
 
-      if (res.data) {
-        const found = res.data.find((a) => a.id === saved.id) || saved;
-        setSelectedAddress(found);
-      } else {
-        setSelectedAddress(saved);
-      }
+      const newAddr = res.data ? (res.data.find((a) => a.id === saved.id) || saved) : saved;
+      setSelectedAddress(newAddr);
+      if (errors.address) setErrors((prev) => ({ ...prev, address: "" }));
     } catch (error: any) {
       triggerPopup("danger", "Address Error", error?.message || "Failed to save address");
     }
@@ -616,14 +610,14 @@ export const RaiseTicketScreen = () => {
         : description);
       const serviceAddress = selectedAddress
         ? [
-            selectedAddress.street,
-            selectedAddress.city,
-            selectedAddress.state,
-            selectedAddress.postalCode,
-            selectedAddress.country,
-          ]
-            .filter(Boolean)
-            .join(", ")
+          selectedAddress.street,
+          selectedAddress.city,
+          selectedAddress.state,
+          selectedAddress.postalCode,
+          selectedAddress.country,
+        ]
+          .filter(Boolean)
+          .join(", ")
         : "";
       formData.append("serviceAddress", serviceAddress);
       formData.append("priority", "MEDIUM");
@@ -1085,11 +1079,23 @@ export const RaiseTicketScreen = () => {
 
         {/* Card 3: Address Details */}
         <AppCard style={styles.card}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 18 }}>
-            <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-              <Text style={styles.stepBadgeText}>3</Text>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
+                <Text style={styles.stepBadgeText}>3</Text>
+              </View>
+              <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Visit Address</Text>
             </View>
-            <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Visit Address</Text>
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                handleOpenAddAddress();
+              }}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              style={[styles.addAddressHeaderBtn, { backgroundColor: `${theme.colors.primary}12` }]}
+            >
+              <Plus size={20} color={theme.colors.primary} />
+            </Pressable>
           </View>
 
           <View style={styles.fieldWrapper}>
@@ -1099,53 +1105,60 @@ export const RaiseTicketScreen = () => {
             </View>
 
             {selectedAddress ? (
-              <View style={{ alignItems: "center", width: "100%", marginVertical: 10 }}>
-                <AppCard
-                  style={{
-                    width: "100%",
-                    padding: 16,
-                    borderWidth: 1.5,
+              <Pressable
+                onPress={() => handleOpenAddressBook()}
+                style={({ pressed }) => [
+                  styles.clickableAddressCard,
+                  {
                     borderColor: theme.colors.borderLight,
-                    backgroundColor: `${theme.colors.primary}04`,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.primary, marginBottom: 6, textTransform: "capitalize" }}>
+                    backgroundColor: pressed ? `${theme.colors.borderLight}30` : theme.colors.card,
+                  }
+                ]}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <Home size={16} color={theme.colors.primary} />
+                  <Text style={[styles.clickableAddressLabel, { color: theme.colors.text }]}>
                     {selectedAddress.label}
                   </Text>
-                  <Text style={{ fontSize: 13, color: theme.colors.text, lineHeight: 20, textAlign: "center" }}>
-                    {formatFullAddress(selectedAddress)}
-                  </Text>
-                </AppCard>
-              </View>
-            ) : (
-              <View style={{ paddingVertical: 20, alignItems: "center" }}>
-                <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: "italic" }}>
-                  No address selected. Please add or select an address.
+                </View>
+                <Text style={[styles.clickableAddressText, { color: theme.colors.text }]}>
+                  {selectedAddress.street}
                 </Text>
-              </View>
+                <Text style={[styles.clickableAddressText, { color: theme.colors.text, marginTop: 2 }]}>
+                  {[selectedAddress.city, selectedAddress.state].filter(Boolean).join(", ")}
+                </Text>
+                {selectedAddress.postalCode ? (
+                  <Text style={[styles.clickableAddressText, { color: theme.colors.text, marginTop: 2 }]}>
+                    {selectedAddress.postalCode}
+                  </Text>
+                ) : null}
+                {selectedAddress.country ? (
+                  <Text style={[styles.clickableAddressText, { color: theme.colors.text, marginTop: 2 }]}>
+                    {selectedAddress.country}
+                  </Text>
+                ) : null}
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => handleOpenAddressBook()}
+                style={({ pressed }) => [
+                  styles.clickableAddressCard,
+                  {
+                    borderColor: theme.colors.borderLight,
+                    backgroundColor: pressed ? `${theme.colors.borderLight}30` : theme.colors.card,
+                    paddingVertical: 24,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }
+                ]}
+              >
+                <MapPin size={24} color={theme.colors.textMuted} style={{ marginBottom: 6 }} />
+                <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: "italic" }}>
+                  No address selected. Tap to select or add.
+                </Text>
+              </Pressable>
             )}
 
-            <View style={{ flexDirection: "row", justifyContent: "center", gap: 12, marginTop: 10 }}>
-              <AppButton
-                title="Change Address"
-                variant="outline"
-                onPress={() => {
-                  setSubModalVisible(false);
-                  handleOpenAddressBook();
-                }}
-                style={{ flex: 1, height: 44 }}
-              />
-              <AppButton
-                title="Add New Address"
-                onPress={() => {
-                  setSubModalVisible(false);
-                  handleOpenAddAddress();
-                }}
-                style={{ flex: 1, height: 44 }}
-              />
-            </View>
             {submitAttempted && errors.address ? (
               <Text style={[styles.errorText, { color: theme.colors.danger, textAlign: "center", marginTop: 8 }]}>
                 {errors.address}
@@ -1402,7 +1415,7 @@ export const RaiseTicketScreen = () => {
         </View>
       </Modal>
 
-{/* Custom Date Picker Modal */}
+      {/* Custom Date Picker Modal */}
       <Modal visible={dateModalVisible} transparent animationType="slide" onRequestClose={() => setDateModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: theme.colors.card, paddingBottom: 24 }]}>
@@ -1619,211 +1632,346 @@ export const RaiseTicketScreen = () => {
         </View>
       </Modal>
 
-      {/* Custom Address Book Modal */}
-      <Modal visible={addressBookVisible} transparent animationType="fade" onRequestClose={() => setAddressBookVisible(false)}>
-        <View style={styles.centeredModalOverlay}>
-          <View style={[styles.centeredModalContent, { backgroundColor: theme.colors.card, maxHeight: "80%" }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Address Book</Text>
-              <Pressable onPress={() => setAddressBookVisible(false)}>
-                <X size={20} color={theme.colors.textMuted} />
-              </Pressable>
-            </View>
+      {/* ──── Select Address Bottom Sheet (List Only) ──── */}
+      <Modal
+        visible={addressBookVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAddressBookVisible(false)}
+        statusBarTranslucent
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+        >
+          <View style={styles.bsOverlay}>
+            <Pressable style={styles.bsBackdrop} onPress={() => setAddressBookVisible(false)} />
+            <View style={[styles.bsContainer, { backgroundColor: theme.colors.card }]}>
+              {/* Drag handle */}
+              <View style={{ alignItems: "center", paddingTop: 10, paddingBottom: 6 }}>
+                <View style={[styles.bsHandle, { backgroundColor: theme.colors.borderLight }]} />
+              </View>
 
-            <View style={{ flex: 1, padding: 16 }}>
+              {/* Header */}
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight }}>
+                <View>
+                  <Text style={{ fontSize: 16, fontWeight: "700", color: theme.colors.text }}>Select Service Address</Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                    {addresses.length > 0 ? `${addresses.length} saved address${addresses.length > 1 ? 'es' : ''}` : "No addresses yet"}
+                  </Text>
+                </View>
+                <Pressable onPress={() => setAddressBookVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                  <X size={20} color={theme.colors.textMuted} />
+                </Pressable>
+              </View>
+
+              {/* Address List */}
               {isLoadingAddresses ? (
-                <AppLoader message="Retrieving addresses..." />
+                <View style={{ padding: 32, alignItems: "center" }}>
+                  <AppLoader message="Loading addresses…" />
+                </View>
               ) : (
                 <FlatList
                   data={addresses}
                   keyExtractor={(item) => item.id}
-                  contentContainerStyle={{ paddingBottom: 60 }}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12 }}
+                  style={{ maxHeight: 340 }}
                   renderItem={({ item }) => {
                     const isSelected = selectedAddress?.id === item.id;
+                    const isHome = item.label?.toLowerCase().includes("home");
                     return (
-                      <AppCard
-                        style={{
-                          marginBottom: 12,
-                          padding: 14,
-                          borderWidth: 1.5,
-                          borderColor: isSelected ? theme.colors.primary : theme.colors.borderLight,
-                          backgroundColor: isSelected ? `${theme.colors.primary}08` : theme.colors.card
-                        }}
+                      <Pressable
                         onPress={() => {
                           setSelectedAddress(item);
                           if (errors.address) setErrors((prev) => ({ ...prev, address: "" }));
                           setAddressBookVisible(false);
                         }}
+                        style={({ pressed }) => [
+                          styles.bsAddressCard,
+                          {
+                            borderColor: isSelected ? theme.colors.primary : theme.colors.borderLight,
+                            backgroundColor: isSelected
+                              ? `${theme.colors.primary}08`
+                              : pressed ? `${theme.colors.borderLight}40` : theme.colors.card,
+                          },
+                        ]}
                       >
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                            <MapPin size={16} color={isSelected ? theme.colors.primary : theme.colors.textMuted} />
-                            <Text style={{ fontSize: 14, fontWeight: "700", textTransform: "capitalize", color: theme.colors.text }}>
-                              {item.label}
-                            </Text>
+                        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
+                          {/* Radio indicator */}
+                          <View style={[styles.radioOuter, { borderColor: isSelected ? theme.colors.primary : theme.colors.textLight, marginTop: 2 }]}>
+                            {isSelected && <View style={[styles.radioInner, { backgroundColor: theme.colors.primary }]} />}
+                          </View>
+
+                          <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                {isHome ? (
+                                  <Home size={14} color={isSelected ? theme.colors.primary : theme.colors.textMuted} />
+                                ) : (
+                                  <MapPin size={14} color={isSelected ? theme.colors.primary : theme.colors.textMuted} />
+                                )}
+                                <Text style={{ fontSize: 14, fontWeight: "700", color: isSelected ? theme.colors.primary : theme.colors.text, textTransform: "capitalize" }}>
+                                  {item.label}
+                                </Text>
+                              </View>
+                              <View style={{ flexDirection: "row", gap: 12 }}>
+                                <Pressable
+                                  onPress={(e) => { e.stopPropagation(); handleOpenEditAddress(item); }}
+                                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                  <Edit2 size={14} color={theme.colors.textMuted} />
+                                </Pressable>
+                                <Pressable
+                                  onPress={(e) => { e.stopPropagation(); handleDeleteAddress(item.id); }}
+                                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                  <Trash2 size={14} color={theme.colors.danger} />
+                                </Pressable>
+                              </View>
+                            </View>
+                            <Text style={{ fontSize: 13, color: theme.colors.textMuted, lineHeight: 18, marginTop: 4 }}>{item.street}</Text>
+                            {item.city ? (
+                              <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>{item.city}</Text>
+                            ) : null}
+                            {item.postalCode ? (
+                              <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>{item.postalCode}</Text>
+                            ) : null}
+                            {item.country ? (
+                              <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>{item.country}</Text>
+                            ) : null}
                             {isSelected && (
-                              <View style={{ backgroundColor: theme.colors.primary, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                                <Text style={{ color: "#ffffff", fontSize: 9, fontWeight: "700" }}>Selected</Text>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
+                                <Check size={12} color={theme.colors.primary} />
+                                <Text style={{ fontSize: 11, fontWeight: "700", color: theme.colors.primary }}>Currently selected</Text>
                               </View>
                             )}
                           </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                            <Pressable onPress={() => handleOpenEditAddress(item)} style={{ padding: 4 }}>
-                              <Edit2 size={16} color={theme.colors.textMuted} />
-                            </Pressable>
-                            <Pressable onPress={() => handleDeleteAddress(item.id)} style={{ padding: 4 }}>
-                              <Trash2 size={16} color={theme.colors.danger} />
-                            </Pressable>
-                          </View>
                         </View>
-                        <Text style={{ fontSize: 13, color: theme.colors.textMuted, lineHeight: 18 }}>
-                          {item.street}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
-                          {[item.city, item.state].filter(Boolean).join(", ")}
-                          {item.postalCode ? ` - ${item.postalCode}` : ""}
-                        </Text>
-                        {item.country && (
-                          <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
-                            {item.country}
-                          </Text>
-                        )}
-                      </AppCard>
+                      </Pressable>
                     );
                   }}
                   ListEmptyComponent={
-                    <View style={{ paddingVertical: 40, alignItems: "center", gap: 10 }}>
-                      <MapPin size={40} color={theme.colors.textLight} />
+                    <View style={{ paddingVertical: 32, alignItems: "center", gap: 8 }}>
+                      <MapPin size={36} color={theme.colors.textLight} />
                       <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>No saved addresses yet.</Text>
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Tap below to add your first address.</Text>
                     </View>
                   }
                 />
               )}
-              <View style={{ paddingVertical: 12, borderTopWidth: 1, borderTopColor: theme.colors.borderLight }}>
-                <AppButton
-                  title="Add New Address"
+
+              {/* Add New Address Button & Cancel Button */}
+              <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 20, borderTopWidth: 1, borderTopColor: theme.colors.borderLight, gap: 10 }}>
+                <Pressable
                   onPress={handleOpenAddAddress}
-                  icon={<Plus size={18} color="#ffffff" style={{ marginRight: 6 }} />}
-                />
+                  style={({ pressed }) => [
+                    styles.bsAddNewBtn,
+                    { borderColor: theme.colors.primary, backgroundColor: pressed ? `${theme.colors.primary}08` : `${theme.colors.primary}04`, opacity: pressed ? 0.85 : 1 },
+                  ]}
+                >
+                  <Plus size={18} color={theme.colors.primary} />
+                  <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.primary, marginLeft: 6 }}>
+                    Add New Address
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setAddressBookVisible(false)}
+                  style={({ pressed }) => [
+                    styles.bsActionBtn,
+                    { borderWidth: 1.5, borderColor: theme.colors.borderLight, backgroundColor: pressed ? `${theme.colors.borderLight}40` : "transparent" }
+                  ]}
+                >
+                  <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.textMuted }}>Cancel</Text>
+                </Pressable>
               </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
-      {/* Add/Edit Address Form Modal */}
-      <Modal visible={addressFormVisible} transparent animationType="fade" onRequestClose={() => setAddressFormVisible(false)}>
-        <View style={styles.centeredModalOverlay}>
-          <View style={[styles.centeredModalContent, { backgroundColor: theme.colors.card }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>
-                {addressForm.id ? "Edit Address" : "Add Address"}
-              </Text>
-              <Pressable onPress={() => setAddressFormVisible(false)}>
-                <X size={20} color={theme.colors.textMuted} />
-              </Pressable>
+      {/* ──── Centered Add/Edit Address Modal Popup (Dialog) ──── */}
+      <Modal
+        visible={addressFormVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddressFormVisible(false)}
+        statusBarTranslucent
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+        >
+          <View style={styles.dialogOverlay}>
+            <Pressable style={styles.dialogBackdrop} onPress={() => setAddressFormVisible(false)} />
+            <View style={[styles.dialogContainer, { backgroundColor: theme.colors.card }]}>
+              {/* Header */}
+              <View style={[styles.dialogHeader, { borderBottomColor: theme.colors.borderLight }]}>
+                <Text style={[styles.dialogTitle, { color: theme.colors.text }]}>
+                  {addressForm.id ? "Edit Address" : "Add New Address"}
+                </Text>
+                <Pressable onPress={() => setAddressFormVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                  <X size={20} color={theme.colors.textMuted} />
+                </Pressable>
+              </View>
+
+              <ScrollView
+                contentContainerStyle={styles.dialogForm}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {/* Field 1: Address Label */}
+                <View style={styles.dialogFieldContainer}>
+                  <Text style={[styles.dialogInputLabel, { color: theme.colors.textMuted }]}>Address Label</Text>
+                  <TextInput
+                    style={[styles.dialogInput, { borderColor: theme.colors.borderLight, color: theme.colors.text, backgroundColor: theme.colors.background }]}
+                    placeholder="e.g. Home, Office"
+                    placeholderTextColor={theme.colors.textLight}
+                    value={addressForm.label}
+                    onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, label: val }))}
+                  />
+                </View>
+
+                {/* Field 2: Street Address */}
+                <View style={styles.dialogFieldContainer}>
+                  <View style={{ flexDirection: "row", marginBottom: 6 }}>
+                    <Text style={[styles.dialogInputLabel, { color: theme.colors.textMuted }]}>Street Address</Text>
+                    <Text style={{ color: theme.colors.danger, fontWeight: "700", marginLeft: 2 }}>*</Text>
+                  </View>
+                  <TextInput
+                    style={[
+                      styles.dialogInput,
+                      {
+                        borderColor: addressSubmitAttempted && addressFormErrors.street ? theme.colors.danger : theme.colors.borderLight,
+                        color: theme.colors.text,
+                        backgroundColor: theme.colors.background,
+                        height: 64,
+                        borderRadius: 12,
+                        textAlignVertical: "top",
+                        paddingTop: 10,
+                      },
+                    ]}
+                    placeholder="Enter street address"
+                    placeholderTextColor={theme.colors.textLight}
+                    value={addressForm.street}
+                    multiline
+                    numberOfLines={3}
+                    onChangeText={(val) => {
+                      setAddressForm((prev: any) => ({ ...prev, street: val }));
+                      if (addressFormErrors.street) setAddressFormErrors((prev) => ({ ...prev, street: "" }));
+                    }}
+                  />
+                  {addressSubmitAttempted && addressFormErrors.street ? (
+                    <Text style={{ fontSize: 11, color: theme.colors.danger, marginTop: 4 }}>{addressFormErrors.street}</Text>
+                  ) : null}
+                </View>
+
+                {/* Field 3 & 4: City and State in one row */}
+                <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", marginBottom: 6 }}>
+                      <Text style={[styles.dialogInputLabel, { color: theme.colors.textMuted }]}>City</Text>
+                      <Text style={{ color: theme.colors.danger, fontWeight: "700", marginLeft: 2 }}>*</Text>
+                    </View>
+                    <TextInput
+                      style={[
+                        styles.dialogInput,
+                        {
+                          borderColor: addressSubmitAttempted && addressFormErrors.city ? theme.colors.danger : theme.colors.borderLight,
+                          color: theme.colors.text,
+                          backgroundColor: theme.colors.background,
+                        },
+                      ]}
+                      placeholder="City"
+                      placeholderTextColor={theme.colors.textLight}
+                      value={addressForm.city}
+                      onChangeText={(val) => {
+                        setAddressForm((prev: any) => ({ ...prev, city: val }));
+                        if (addressFormErrors.city) setAddressFormErrors((prev) => ({ ...prev, city: "" }));
+                      }}
+                    />
+                    {addressSubmitAttempted && addressFormErrors.city ? (
+                      <Text style={{ fontSize: 11, color: theme.colors.danger, marginTop: 4 }}>{addressFormErrors.city}</Text>
+                    ) : null}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.dialogInputLabel, { color: theme.colors.textMuted }]}>State</Text>
+                    <TextInput
+                      style={[styles.dialogInput, { borderColor: theme.colors.borderLight, color: theme.colors.text, backgroundColor: theme.colors.background }]}
+                      placeholder="State"
+                      placeholderTextColor={theme.colors.textLight}
+                      value={addressForm.state}
+                      onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, state: val }))}
+                    />
+                  </View>
+                </View>
+
+                {/* Field 5 & 6: Pincode and Country in one row */}
+                <View style={{ flexDirection: "row", gap: 12, marginBottom: 20 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.dialogInputLabel, { color: theme.colors.textMuted }]}>Pincode</Text>
+                    <TextInput
+                      style={[styles.dialogInput, { borderColor: theme.colors.borderLight, color: theme.colors.text, backgroundColor: theme.colors.background }]}
+                      placeholder="Pincode"
+                      placeholderTextColor={theme.colors.textLight}
+                      value={addressForm.postalCode}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, postalCode: val }))}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.dialogInputLabel, { color: theme.colors.textMuted }]}>Country</Text>
+                    <TextInput
+                      style={[styles.dialogInput, { borderColor: theme.colors.borderLight, color: theme.colors.text, backgroundColor: theme.colors.background }]}
+                      placeholder="Country"
+                      placeholderTextColor={theme.colors.textLight}
+                      value={addressForm.country}
+                      onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, country: val }))}
+                    />
+                  </View>
+                </View>
+
+                {/* Action Buttons */}
+                <View style={{ flexDirection: "row", gap: 12 }}>
+                  <Pressable
+                    onPress={() => setAddressFormVisible(false)}
+                    style={({ pressed }) => [
+                      styles.dialogActionBtn,
+                      styles.dialogActionBtnSecondary,
+                      { borderColor: theme.colors.borderLight, backgroundColor: pressed ? `${theme.colors.borderLight}20` : "transparent" },
+                    ]}
+                  >
+                    <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.textMuted }}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleSaveAddress}
+                    disabled={addAddressMutation.isPending || updateAddressMutation.isPending}
+                    style={({ pressed }) => [
+                      styles.dialogActionBtn,
+                      styles.dialogActionBtnPrimary,
+                      {
+                        backgroundColor: theme.colors.primary,
+                        opacity: pressed || addAddressMutation.isPending || updateAddressMutation.isPending ? 0.75 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={{ fontSize: 14, fontWeight: "700", color: "#ffffff" }}>
+                      {(addAddressMutation.isPending || updateAddressMutation.isPending)
+                        ? "Saving…"
+                        : "Save Address"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
             </View>
-
-            <ScrollView contentContainerStyle={{ padding: 16 }}>
-              {/* Label Field */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Address Label</Text>
-                <AppInput
-                  placeholder="e.g. Home, Office"
-                  value={addressForm.label}
-                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, label: val }))}
-                />
-              </View>
-
-              {/* Street Address Field */}
-              <View style={{ marginBottom: 12 }}>
-                <View style={styles.labelRow}>
-                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Street Address</Text>
-                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-                </View>
-                <AppInput
-                  placeholder="Enter street address"
-                  value={addressForm.street}
-                  onChangeText={(val) => {
-                    setAddressForm((prev: any) => ({ ...prev, street: val }));
-                    if (addressFormErrors.street) setAddressFormErrors((prev) => ({ ...prev, street: "" }));
-                  }}
-                  multiline
-                  numberOfLines={3}
-                />
-                {addressSubmitAttempted && addressFormErrors.street ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{addressFormErrors.street}</Text>
-                ) : null}
-              </View>
-
-              {/* City Field */}
-              <View style={{ marginBottom: 12 }}>
-                <View style={styles.labelRow}>
-                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>City</Text>
-                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-                </View>
-                <AppInput
-                  placeholder="Enter city"
-                  value={addressForm.city}
-                  onChangeText={(val) => {
-                    setAddressForm((prev: any) => ({ ...prev, city: val }));
-                    if (addressFormErrors.city) setAddressFormErrors((prev) => ({ ...prev, city: "" }));
-                  }}
-                />
-                {addressSubmitAttempted && addressFormErrors.city ? (
-                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{addressFormErrors.city}</Text>
-                ) : null}
-              </View>
-
-              {/* State Field */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>State</Text>
-                <AppInput
-                  placeholder="Enter state"
-                  value={addressForm.state}
-                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, state: val }))}
-                />
-              </View>
-
-              {/* Country Field */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Country</Text>
-                <AppInput
-                  placeholder="Enter country"
-                  value={addressForm.country}
-                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, country: val }))}
-                />
-              </View>
-
-              {/* Postal Code Field */}
-              <View style={{ marginBottom: 16 }}>
-                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Postal Code</Text>
-                <AppInput
-                  placeholder="Enter postal code"
-                  value={addressForm.postalCode}
-                  onChangeText={(val) => setAddressForm((prev: any) => ({ ...prev, postalCode: val }))}
-                />
-              </View>
-
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
-                <AppButton
-                  title="Cancel"
-                  variant="outline"
-                  onPress={() => setAddressFormVisible(false)}
-                  style={{ flex: 1 }}
-                />
-                <AppButton
-                  title={addressForm.id ? "Update" : "Save"}
-                  onPress={handleSaveAddress}
-                  disabled={!addressForm.street.trim() || !addressForm.city.trim()}
-                  loading={addAddressMutation.isPending || updateAddressMutation.isPending}
-                  style={{ flex: 1 }}
-                />
-              </View>
-            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
+
+    
     </KeyboardAvoidingView>
   );
 };
@@ -2381,5 +2529,177 @@ const styles = StyleSheet.create({
   modalActionBtnTextFullOk: { fontSize: 14, fontWeight: "700", color: "#ffffff" },
   modalActionBtnFullCancel: { height: 48, borderRadius: 10, justifyContent: "center", alignItems: "center", borderWidth: 1.5, backgroundColor: "transparent" },
   modalActionBtnTextFullCancel: { fontSize: 14, fontWeight: "700" },
+  addAddressHeaderBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  clickableAddressCard: {
+    width: "100%",
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    marginVertical: 10,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  clickableAddressLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    textTransform: "capitalize",
+  },
+  clickableAddressText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  // ── Bottom Sheet styles ──
+  bsOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "flex-end",
+  },
+  bsBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  bsContainer: {
+    width: "100%",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: Platform.OS === "ios" ? 28 : 16,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 10,
+  },
+  bsFormContainer: {
+    maxHeight: "90%",
+  },
+  bsHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    marginBottom: 4,
+  },
+  bsAddressCard: {
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginBottom: 10,
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  bsAddNewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1.5,
+  },
+  bsActionBtn: {
+    height: 48,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bsInputLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 6,
+    letterSpacing: 0.2,
+  },
+  bsInput: {
+    height: 48,
+    borderWidth: 1.5,
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  // ──── Centered Dialog Styles ────
+  dialogOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.6)", // Dimmed background
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  dialogBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  dialogContainer: {
+    width: "90%",
+    borderRadius: 16, // Rounded corners 16px
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 10,
+    overflow: "hidden",
+  },
+  dialogHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+  },
+  dialogTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  dialogForm: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 20,
+  },
+  dialogFieldContainer: {
+    marginBottom: 12,
+  },
+  dialogInputLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 6,
+    letterSpacing: 0.2,
+  },
+  dialogInput: {
+    height: 44, // Compact height
+    borderWidth: 1.5,
+    borderRadius: 22, // Rounded corners
+    paddingHorizontal: 16,
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  dialogActionBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dialogActionBtnSecondary: {
+    borderWidth: 1.5,
+  },
+  dialogActionBtnPrimary: {
+    borderWidth: 0,
+  },
 });
 export default RaiseTicketScreen;

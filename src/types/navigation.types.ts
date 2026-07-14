@@ -29,7 +29,7 @@ export type CustomerStackParamList = {
   InvoiceList: undefined;
   InvoiceDetails: { invoiceId: string };
   Feedback: { ticketId: string; ticketNumber: string };
-  AddressBook: { onSelectAddress?: (address: Address) => void } | undefined;
+  AddressBook: { onSelectAddress?: (address: Address) => void; selectedAddressId?: string } | undefined;
   NotificationList: undefined;
 };
 

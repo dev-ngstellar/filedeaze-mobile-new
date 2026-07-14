@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Plus, MapPin, Edit2, Trash2, X, Map } from "lucide-react-native";
+import { Plus, MapPin, Edit2, Trash2, X, Map, Home, Briefcase, Check } from "lucide-react-native";
 import { useTheme } from "../../theme";
 import {
   useCustomerAddresses,
@@ -20,6 +20,7 @@ import {
   useDeleteCustomerAddress,
 } from "../../hooks/useCustomer";
 import { CustomerStackParamList } from "../../types/navigation.types";
+import { Address } from "../../services/customer.service";
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
 import { AppCard } from "../../components/AppCard";
@@ -118,11 +119,12 @@ export const AddressBookScreen = () => {
         postalCode: form.postalCode.trim() || undefined,
       };
 
+      let saved: Address;
       if (form.id) {
-        await updateAddressMutation.mutateAsync({ id: form.id, payload });
+        saved = await updateAddressMutation.mutateAsync({ id: form.id, payload });
         Alert.alert("Success", "Address updated successfully.");
       } else {
-        await addAddressMutation.mutateAsync(payload);
+        saved = await addAddressMutation.mutateAsync(payload);
         Alert.alert("Success", "Address saved successfully.");
       }
       setModalVisible(false);
@@ -166,47 +168,89 @@ export const AddressBookScreen = () => {
           data={addresses}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <AppCard
-              style={styles.addressCard}
-              onPress={() => {
-                if (onSelectAddress) {
-                  onSelectAddress(item);
-                  navigation.goBack();
-                }
-              }}
-            >
-              <View style={styles.cardHeader}>
-                <View style={styles.labelWrapper}>
-                  <MapPin size={16} color={theme.colors.primary} />
-                  <Text style={[styles.addressLabel, { color: theme.colors.text }]}>
-                    {item.label}
-                  </Text>
+          renderItem={({ item }) => {
+            const isSelected = route.params?.selectedAddressId === item.id;
+            const isHome = item.label?.toLowerCase().includes("home");
+            const isOffice = item.label?.toLowerCase().includes("office") || item.label?.toLowerCase().includes("work");
+            
+            return (
+              <AppCard
+                style={[
+                  styles.addressCard,
+                  {
+                    borderColor: isSelected ? theme.colors.primary : theme.colors.borderLight,
+                    borderWidth: isSelected ? 1.5 : 1,
+                    backgroundColor: isSelected ? `${theme.colors.primary}04` : theme.colors.card,
+                  }
+                ]}
+                onPress={() => {
+                  if (onSelectAddress) {
+                    onSelectAddress(item);
+                    navigation.goBack();
+                  }
+                }}
+              >
+                <View style={styles.cardHeader}>
+                  <View style={styles.labelWrapper}>
+                    {isHome ? (
+                      <Home size={16} color={theme.colors.primary} />
+                    ) : isOffice ? (
+                      <Briefcase size={16} color={theme.colors.primary} />
+                    ) : (
+                      <MapPin size={16} color={theme.colors.primary} />
+                    )}
+                    <Text style={[styles.addressLabel, { color: theme.colors.text }]}>
+                      {item.label}
+                    </Text>
+                  </View>
+                  <View style={styles.actionButtons}>
+                    <Pressable
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleOpenEdit(item);
+                      }}
+                      style={styles.iconBtn}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Edit2 size={16} color={theme.colors.textMuted} />
+                    </Pressable>
+                    <Pressable
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleDelete(item.id);
+                      }}
+                      style={styles.iconBtn}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Trash2 size={16} color={theme.colors.danger} />
+                    </Pressable>
+                  </View>
                 </View>
-                <View style={styles.actionButtons}>
-                  <Pressable onPress={() => handleOpenEdit(item)} style={styles.iconBtn}>
-                    <Edit2 size={16} color={theme.colors.textMuted} />
-                  </Pressable>
-                  <Pressable onPress={() => handleDelete(item.id)} style={styles.iconBtn}>
-                    <Trash2 size={16} color={theme.colors.danger} />
-                  </Pressable>
-                </View>
-              </View>
 
-              <Text style={[styles.addressText, { color: theme.colors.textMuted }]}>
-                {item.street}
-              </Text>
-              <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: -6, marginBottom: 8 }}>
-                {[item.city, item.state].filter(Boolean).join(", ")}
-                {item.postalCode ? ` - ${item.postalCode}` : ""}
-              </Text>
-              {item.country ? (
-                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>
-                  {item.country}
+                <Text style={[styles.addressText, { color: theme.colors.textMuted }]}>
+                  {item.street}
                 </Text>
-              ) : null}
-            </AppCard>
-          )}
+                <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginTop: -6, marginBottom: 8 }}>
+                  {[item.city, item.state].filter(Boolean).join(", ")}
+                  {item.postalCode ? ` - ${item.postalCode}` : ""}
+                </Text>
+                {item.country ? (
+                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginBottom: 8 }}>
+                    {item.country}
+                  </Text>
+                ) : null}
+
+                {isSelected && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
+                    <Check size={14} color={theme.colors.success} />
+                    <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.success }}>
+                      Currently Selected
+                    </Text>
+                  </View>
+                )}
+              </AppCard>
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <MapPin size={48} color={theme.colors.textLight} />
