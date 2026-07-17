@@ -1,5 +1,5 @@
 import { apiClient } from "../api/client";
-import * as ImageManipulator from "expo-image-manipulator";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useAuthStore } from "../store/auth.store";
 import { APP_CONFIG } from "../config/app.config";
 
@@ -22,6 +22,86 @@ export type TicketStatus =
   | "RESCHEDULED";
 
 export type TicketPriority = "URGENT" | "HIGH" | "MEDIUM" | "LOW";
+
+/** Part-level warranty coverage — NOT the same thing as AMC (ticket-level). Every spare part a
+ * technician uses must be tagged individually; WARRANTY is always billed ₹0, OUT_OF_WARRANTY is
+ * billed quantity × unit price. Backend computes the amount — this is only ever a selection. */
+export type SparePartCoverageType = "WARRANTY" | "OUT_OF_WARRANTY";
+
+/** A spare part available for a ticket's service (sub-category scoped). */
+export interface SparePartCatalogItem {
+  id: string;
+  partName: string;
+  partNumber?: string | null;
+  description?: string | null;
+  unitPrice: number;
+  unitOfMeasure: string;
+}
+
+/** One spare-part line the technician is submitting — sparePartId/quantity/warrantyStatus is all
+ * the backend needs; catalog fields are kept only for display, never sent back for calculation. */
+export interface SparePartUsageInput {
+  sparePartId: string;
+  partName: string;
+  unitPrice: number;
+  quantity: number;
+  warrantyStatus: SparePartCoverageType;
+}
+
+/** Editing-time shape for a spare-part row — warrantyStatus starts unset so the UI can force an
+ * explicit choice before submission (see SparePartsSection's validation). localId is a client-only
+ * key for list rendering/removal, distinct from sparePartId so re-adding the same catalog part
+ * after removing it still gets a fresh row identity. */
+export interface SparePartUsageDraft {
+  localId: string;
+  sparePartId: string;
+  partName: string;
+  unitPrice: number;
+  quantity: number;
+  warrantyStatus: SparePartCoverageType | null;
+}
+
+/** AMC contract summary for a ticket's asset — null when the asset has no active AMC contract. */
+export interface TicketAmcStatus {
+  subscriptionId: string;
+  planName: string;
+  status: string;
+  startDate: string | null;
+  endDate: string | null;
+  totalVisits: number;
+  remainingVisits: number;
+}
+
+/** GST-inclusive charge breakdown returned by preview-payment / collect-payment — the source of
+ * truth for what to actually bill, never recomputed on device. */
+export interface PaymentBreakdown {
+  billingType: string;
+  serviceCharge: number;
+  labourCharge: number;
+  sparePartsAmount: number;
+  sparePartsWaived: boolean;
+  serviceChargeWaived: boolean;
+  labourChargeWaived: boolean;
+  warrantyPartsValue: number;
+  additionalCharge: number;
+  discount: number;
+  grossAmount: number;
+  amount: number;
+  amcCovered: boolean;
+  fullyWaived: boolean;
+  subtotal: number;
+  gstEnabled: boolean;
+  gstPercent: number;
+  gstAmount: number;
+  grandTotal: number;
+}
+
+/** Response of collect-payment — the breakdown plus the invoice/payment records it just created. */
+export interface CollectPaymentResult extends PaymentBreakdown {
+  paymentId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+}
 
 export interface Ticket {
   id: string; // CHANGED: Add UUID field for API calls
@@ -51,6 +131,8 @@ export interface Ticket {
   pendingReason?: string;
   category?: string;
   subCategory?: string;
+  /** Used to scope the spare-parts catalog for this ticket's service. */
+  subCategoryId?: string;
   categoryPrice?: number;
   serviceCharge?: number;
   inspectionCharge?: number;
@@ -65,10 +147,36 @@ export interface Ticket {
   invoiceGstPercent?: number;
   invoiceTotal?: number;
   invoiceGeneratedAt?: string;
+  /** Itemized invoice breakdown — persisted, exactly as billed. Used instead of any client-side
+   * back-calculation (e.g. deriving spare parts from subtotal minus a guessed base price). */
+  invoiceServiceCharge?: number;
+  invoiceLabourCharge?: number;
+  invoiceSparePartsAmount?: number;
+  invoiceAdditionalCharge?: number;
+  invoiceDiscount?: number;
+  /** Whether service/labour were actually waived on the payment that was collected — the Invoice
+   * row itself doesn't store this, only the Payment row does. */
+  paymentServiceChargeWaived?: boolean;
+  paymentLabourChargeWaived?: boolean;
+  paymentStatus?: string;
   gstEnabled?: boolean;
   gstPercent?: number;
   closedAt?: string;
   createdAt?: string;
+  customerAsset?: {
+    id?: string;
+    name: string;
+    brand?: string;
+    model?: string;
+    serialNumber?: string;
+    purchaseDate?: string;
+    warrantyExpiresAt?: string;
+  };
+  /** True when this ticket is billed under AMC (either a scheduled AMC visit or a customer-raised
+   * AMC Service request) — service & labour charges are waived. */
+  isAmcCovered?: boolean;
+  /** Current AMC coverage summary for the ticket's asset. Only present on ticket detail responses. */
+  amcStatus?: TicketAmcStatus | null;
 }
 
 export interface Invoice {
@@ -148,6 +256,7 @@ export function normalizeTicket(raw: any): Ticket {
     customerAlternatePhone: raw.customer?.alternatePhone ?? undefined,
     service: raw.subCategory?.name ?? raw.service ?? "—",
     category: raw.subCategory?.category?.name ?? raw.category ?? "",
+    subCategoryId: raw.subCategory?.id ?? raw.subCategoryId ?? undefined,
     description: raw.description ?? "",
     status: raw.status ?? "ASSIGNED",
     priority: raw.priority ?? undefined,
@@ -174,12 +283,31 @@ export function normalizeTicket(raw: any): Ticket {
     invoiceGstPercent: raw.invoice?.gstPercent != null ? Number(raw.invoice.gstPercent) : undefined,
     invoiceTotal: raw.invoice?.total != null ? Number(raw.invoice.total) : undefined,
     invoiceGeneratedAt: raw.invoice?.generatedAt ? String(raw.invoice.generatedAt) : undefined,
+    invoiceServiceCharge: raw.invoice?.serviceCharge != null ? Number(raw.invoice.serviceCharge) : undefined,
+    invoiceLabourCharge: raw.invoice?.labourCharge != null ? Number(raw.invoice.labourCharge) : undefined,
+    invoiceSparePartsAmount: raw.invoice?.sparePartsAmount != null ? Number(raw.invoice.sparePartsAmount) : undefined,
+    invoiceAdditionalCharge: raw.invoice?.additionalCharge != null ? Number(raw.invoice.additionalCharge) : undefined,
+    invoiceDiscount: raw.invoice?.discount != null ? Number(raw.invoice.discount) : undefined,
+    paymentServiceChargeWaived: raw.payment?.serviceChargeWaived ?? undefined,
+    paymentLabourChargeWaived: raw.payment?.labourChargeWaived ?? undefined,
+    paymentStatus: raw.payment?.status ?? undefined,
     gstEnabled: raw.gstEnabled ?? false,
     gstPercent: raw.gstPercent != null ? Number(raw.gstPercent) : 0,
     closedAt: raw.closedAt ? String(raw.closedAt) : undefined,
     images: images.map((img: any) => img.imageUrl),
     statusLogs: raw.statusLogs ?? [],
     createdAt: raw.createdAt ?? raw.created_at ?? undefined,
+    customerAsset: raw.customerAsset ? {
+      id: raw.customerAsset.id,
+      name: raw.customerAsset.name ?? "—",
+      brand: raw.customerAsset.brand ?? undefined,
+      model: raw.customerAsset.model ?? undefined,
+      serialNumber: raw.customerAsset.serialNumber ?? undefined,
+      purchaseDate: raw.customerAsset.purchaseDate ?? undefined,
+      warrantyExpiresAt: raw.customerAsset.warrantyExpiresAt ?? undefined,
+    } : undefined,
+    isAmcCovered: raw.isAmcCovered ?? false,
+    amcStatus: raw.amcStatus ?? undefined,
   };
 }
 
@@ -355,12 +483,13 @@ export class JobService {
     let mimeType = "image/jpeg";
 
     try {
-      const manipResult = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [{ resize: { width: 1280 } }],
-        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
-      );
-      uploadUri = manipResult.uri;
+      // New context-based API (the old manipulateAsync shim is deprecated and has been observed to
+      // leak native image memory under SDK 54, causing the app to crash and reload after a few uploads).
+      const context = ImageManipulator.manipulate(imageUri);
+      context.resize({ width: 1280 });
+      const rendered = await context.renderAsync();
+      const result = await rendered.saveAsync({ compress: 0.6, format: SaveFormat.JPEG });
+      uploadUri = result.uri;
     } catch (error) {
       console.error("Failed to compress technician image:", error);
     }
@@ -415,6 +544,8 @@ export class JobService {
 
   /**
    * POST /mobile/technician/tickets/:ticketNo/complete
+   * sparePartsUsed carries only sparePartId/quantity/warrantyStatus per line — coverageType and
+   * calculatedAmount are computed server-side, never on device.
    */
   static async completeJob(
     ticketNo: string,
@@ -426,11 +557,13 @@ export class JobService {
       duration: string;
       paymentCollection?: number;
       paymentMethod?: string;
+      sparePartsUsed?: { sparePartId: string; quantity: number; warrantyStatus: SparePartCoverageType }[];
     }
   ): Promise<Ticket> {
     const backendPayload = {
       customerSignature: payload.customerSignature || "captured",
       notes: payload.workNotes || "Completed",
+      ...(payload.sparePartsUsed?.length ? { sparePartsUsed: payload.sparePartsUsed } : {}),
     };
     const res = await apiClient.post<Ticket>(`${BASE}/tickets/${ticketNo}/complete`, backendPayload);
     return res.data;
@@ -465,21 +598,79 @@ export class JobService {
     return res.data;
   }
 
+  /**
+   * GET /mobile/technician/tickets/:ticketNo/payment-preview
+   * Backend-computed GST-inclusive breakdown before submitting collectPayment() — AMC waivers and
+   * per-part warranty amounts are applied here, never on device.
+   */
+  static async previewPayment(
+    ticketNo: string,
+    params: { serviceCharge: number; labourCharge?: number; additionalCharge?: number; discount?: number }
+  ): Promise<PaymentBreakdown> {
+    const res = await apiClient.get<{ data: PaymentBreakdown }>(
+      `${BASE}/tickets/${ticketNo}/payment-preview`,
+      { params }
+    );
+    return (res.data as any)?.data ?? res.data;
+  }
+
+  /**
+   * POST /mobile/technician/tickets/:ticketNo/collect-payment
+   * serviceCharge is mandatory (billed ₹0 server-side when the ticket is AMC-covered).
+   * warrantyParts/nonWarrantyParts only need {sparePartId, quantity} — which array a line is in
+   * IS its warranty status; unitPrice/coverageType/calculatedAmount are resolved server-side.
+   */
   static async collectPayment(
     ticketNo: string,
     payload: {
-      amount: number;
+      serviceCharge: number;
+      labourCharge?: number;
+      additionalCharge?: number;
+      discount?: number;
+      warrantyParts?: { sparePartId: string; quantity: number }[];
+      nonWarrantyParts?: { sparePartId: string; quantity: number }[];
       method: string;
     }
-  ): Promise<{ invoiceNo: string; ticketNo: string; amount: number }> {
+  ): Promise<CollectPaymentResult> {
     const methodMapped = payload.method.toUpperCase() === "CASH" ? "CASH" : "UPI_QR";
     const backendPayload = {
-      amount: payload.amount,
+      serviceCharge: payload.serviceCharge,
+      labourCharge: payload.labourCharge,
+      additionalCharge: payload.additionalCharge,
+      discount: payload.discount,
+      warrantyParts: payload.warrantyParts?.length ? payload.warrantyParts : undefined,
+      nonWarrantyParts: payload.nonWarrantyParts?.length ? payload.nonWarrantyParts : undefined,
       method: methodMapped,
     };
 
-    const res = await apiClient.post(`/mobile/technician/tickets/${ticketNo}/collect-payment`, backendPayload);
-    return res.data;
+    const res = await apiClient.post<{ data: CollectPaymentResult }>(
+      `/mobile/technician/tickets/${ticketNo}/collect-payment`,
+      backendPayload
+    );
+    return (res.data as any)?.data ?? res.data;
+  }
+
+  /**
+   * GET /mobile/technician/service-sub-categories/:subCategoryId/spare-parts
+   * TODO(backend): this technician-scoped route does not exist yet — only the manager/admin
+   * route (`web/manager/service-sub-categories/:subCategoryId/spare-parts`) is implemented, and
+   * it's guarded to ADMIN/MANAGER roles only, so a technician JWT cannot call it. Add a
+   * technician-accessible mirror (read-only, isActive parts only) so this can list real catalog
+   * data. Until then this call will 403/404 — callers must treat the failure as "catalog
+   * unavailable" (see SparePartPickerModal's error state), not crash.
+   */
+  static async getSparePartsForSubCategory(subCategoryId: string): Promise<SparePartCatalogItem[]> {
+    const res = await apiClient.get<any>(`${BASE}/service-sub-categories/${subCategoryId}/spare-parts`);
+    const body = res.data;
+    const list = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : Array.isArray(body?.data?.items) ? body.data.items : Array.isArray(body?.items) ? body.items : [];
+    return list.map((p: any) => ({
+      id: p.id,
+      partName: p.partName,
+      partNumber: p.partNumber ?? null,
+      description: p.description ?? null,
+      unitPrice: Number(p.unitPrice) || 0,
+      unitOfMeasure: p.unitOfMeasure,
+    }));
   }
 
   /**

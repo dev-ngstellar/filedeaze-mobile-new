@@ -13,6 +13,9 @@ import { InvoiceDetailsScreen } from "../screens/customer/InvoiceDetailsScreen";
 import { FeedbackScreen } from "../screens/customer/FeedbackScreen";
 import { AddressBookScreen } from "../screens/customer/AddressBookScreen";
 import { NotificationListScreen } from "../screens/shared/NotificationListScreen";
+import { CustomerAssetsScreen } from "../screens/customer/CustomerAssetsScreen";
+import { MyAmcScreen } from "../screens/customer/MyAmcScreen";
+import { AmcDetailsScreen } from "../screens/customer/AmcDetailsScreen";
 
 import { CustomerHomeScreen } from "../screens/customer/CustomerHomeScreen";
 import { CustomerJobDetailsScreen } from "../screens/customer/CustomerJobDetailsScreen";
@@ -40,6 +43,9 @@ export const CustomerNavigator = () => {
       <Stack.Screen name="InvoiceDetails" component={InvoiceDetailsScreen} />
       <Stack.Screen name="Feedback" component={FeedbackScreen} />
       <Stack.Screen name="AddressBook" component={AddressBookScreen} />
+      <Stack.Screen name="CustomerAssets" component={CustomerAssetsScreen} />
+      <Stack.Screen name="MyAmc" component={MyAmcScreen} />
+      <Stack.Screen name="AmcDetails" component={AmcDetailsScreen} />
 
       <Stack.Screen name="NotificationList" component={NotificationListScreen} />
       {/* Keep older screens for compatibility */}

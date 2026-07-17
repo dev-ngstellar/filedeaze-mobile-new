@@ -6,6 +6,7 @@ import { Ticket, TicketStatus } from "../services/job.service";
 import { StatusBadge } from "./StatusBadge";
 import { PriorityBadge } from "./PriorityBadge";
 import { AppConfirmModal } from "./AppConfirmModal";
+import { AMCBadge } from "./amc/AMCBadge";
 
 interface TicketCardProps {
   ticket: Ticket;
@@ -152,6 +153,12 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
           </Text>
           <StatusBadge status={ticket.status} paymentCollection={ticket.paymentCollection} />
         </View>
+
+        {ticket.isAmcCovered ? (
+          <View style={{ marginBottom: 6 }}>
+            <AMCBadge label="AMC JOB" active />
+          </View>
+        ) : null}
 
         {/* Category & Service Type */}
         {ticket.category && (

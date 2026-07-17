@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { JobService, TicketStatus, Ticket } from "../services/job.service";
+import { JobService, TicketStatus, Ticket, SparePartCoverageType } from "../services/job.service";
 
 // ==========================================
 // QUERY KEYS
@@ -116,6 +116,7 @@ export function useCompleteJob() {
         paymentMethod?: string;
         lat?: number;
         lng?: number;
+        sparePartsUsed?: { sparePartId: string; quantity: number; warrantyStatus: SparePartCoverageType }[];
       };
     }) => JobService.completeJob(ticketNo, payload),
     onSuccess: (data) => {
@@ -155,6 +156,27 @@ export function useMarkJobPending() {
   });
 }
 
+/** Live, backend-computed GST-inclusive breakdown for the payment step — refetches whenever the
+ * technician-entered charges change so the AMC waiver / final amount shown is never client-math. */
+export function usePaymentPreview(
+  ticketNo: string,
+  params: { serviceCharge: number; labourCharge?: number; additionalCharge?: number; discount?: number },
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: [
+      "payment-preview",
+      ticketNo,
+      params.serviceCharge,
+      params.labourCharge,
+      params.additionalCharge,
+      params.discount,
+    ],
+    queryFn: () => JobService.previewPayment(ticketNo, params),
+    enabled: enabled && !!ticketNo && params.serviceCharge >= 0,
+  });
+}
+
 export function useCollectPayment() {
   const queryClient = useQueryClient();
 
@@ -165,27 +187,31 @@ export function useCollectPayment() {
     }: {
       ticketNo: string;
       payload: {
-        amount: number;
+        serviceCharge: number;
+        labourCharge?: number;
+        additionalCharge?: number;
+        discount?: number;
+        warrantyParts?: { sparePartId: string; quantity: number }[];
+        nonWarrantyParts?: { sparePartId: string; quantity: number }[];
         method: string;
-        baseAmount?: number;
-        platformFee?: number;
-        shippingCharge?: number;
-        handlingCharge?: number;
-        subtotal?: number;
-        gstEnabled?: boolean;
-        gstPercent?: number;
-        gstAmount?: number;
-        discountAmount?: number;
-        totalAmount?: number;
-        collectedAmount?: number;
-        upiId?: string;
-        currency?: string;
       };
     }) => JobService.collectPayment(ticketNo, payload),
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.details(vars.ticketNo) });
     },
+  });
+}
+
+/** Spare-parts catalog for a ticket's service. Gracefully surfaces isError/error instead of
+ * throwing — see JobService.getSparePartsForSubCategory's TODO: the technician-scoped listing
+ * endpoint doesn't exist on the backend yet, so this legitimately fails until that's added. */
+export function useSparePartsCatalog(subCategoryId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["spare-parts-catalog", subCategoryId],
+    queryFn: () => JobService.getSparePartsForSubCategory(subCategoryId as string),
+    enabled: enabled && !!subCategoryId,
+    retry: false,
   });
 }
 

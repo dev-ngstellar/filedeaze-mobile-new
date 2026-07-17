@@ -58,6 +58,17 @@ export interface TicketLog {
   notes: string | null;
 }
 
+/** AMC contract summary attached to a ticket's asset — null when the asset has no active AMC contract. */
+export interface TicketAmcStatus {
+  subscriptionId: string;
+  planName: string;
+  status: string;
+  startDate: string | null;
+  endDate: string | null;
+  totalVisits: number;
+  remainingVisits: number;
+}
+
 export interface CustomerTicketDetail {
   id: string;
   ticketNumber: string;
@@ -67,6 +78,11 @@ export interface CustomerTicketDetail {
   status: string;
   scheduledAt: string | null;
   createdAt: string;
+  /** Non-null only when this ticket was raised as an AMC Service request (isAmcRequest: true). */
+  amcSubscriptionId?: string | null;
+  /** Current AMC coverage summary for the ticket's asset — independent of whether this particular
+   * ticket was raised as an AMC request (see amcSubscriptionId for that). */
+  amcStatus?: TicketAmcStatus | null;
   technician: {
     id: string;
     name: string;
@@ -74,6 +90,13 @@ export interface CustomerTicketDetail {
     currentLat: number | null;
     currentLng: number | null;
     rating: number | null;
+  } | null;
+  customerAsset?: {
+    id: string;
+    name: string;
+    brand: string | null;
+    model: string | null;
+    serialNumber: string | null;
   } | null;
   subCategory: {
     id: string;
@@ -98,12 +121,29 @@ export interface CustomerTicketDetail {
     status: string;
     amount: number;
     method: string;
+    serviceCharge: number;
+    labourCharge: number;
+    sparePartsAmount: number;
+    serviceChargeWaived: boolean;
+    labourChargeWaived: boolean;
+    sparePartsWaived: boolean;
+    additionalCharge: number;
+    discount: number;
   } | null;
   invoice?: {
     id: string;
     invoiceNumber: string;
+    serviceCharge: number;
+    labourCharge: number;
+    sparePartsAmount: number;
+    additionalCharge: number;
+    discount: number;
+    subtotal: number;
+    gstPercent: number;
+    gstAmount: number;
     total: number;
     pdfUrl: string | null;
+    generatedAt: string;
   } | null;
   feedback?: {
     id: string;
@@ -150,6 +190,35 @@ export interface CustomerFeedback {
   };
 }
 
+export interface CustomerAsset {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  categoryId: string | null;
+  name: string;
+  brand: string | null;
+  model: string | null;
+  serialNumber: string | null;
+  purchaseDate: string | null;
+  installationDate: string | null;
+  installationAddress: string | null;
+  warrantyExpiresAt: string | null;
+  qrCode: string | null;
+  notes: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  category: { id: string; name: string } | null;
+  /** True when this asset has a currently ACTIVE AMC subscription. */
+  hasActiveAmc: boolean;
+}
+
+/** Returned by GET /mobile/customer/assets/:id — adds fields not present in the list response. */
+export interface CustomerAssetDetail extends CustomerAsset {
+  ticketCount: number;
+  activeAmcPlanName: string | null;
+}
+
 export interface CustomerInvoice {
   id: string;
   invoiceNumber: string;
@@ -181,6 +250,47 @@ export interface CustomerInvoice {
   } | null;
 }
 
+/** Returned by GET /mobile/customer/invoices/:id — includes the itemized charge breakdown and
+ * waiver flags needed to show "Covered by AMC" for AMC-billed tickets. */
+export interface CustomerInvoiceDetail {
+  id: string;
+  invoiceNumber: string;
+  serviceCharge: number;
+  labourCharge: number;
+  sparePartsAmount: number;
+  additionalCharge: number;
+  discount: number;
+  subtotal: number;
+  gstPercent: number;
+  gstAmount: number;
+  total: number;
+  generatedAt: string;
+  pdfUrl: string | null;
+  ticket: {
+    ticketNumber: string;
+    description: string;
+    priority: string;
+    subCategory: {
+      name: string;
+      category: {
+        name: string;
+      };
+    };
+    technician?: {
+      name: string;
+      phone: string;
+    } | null;
+  };
+  payment: {
+    method: string;
+    status: string;
+    collectedAt: string | null;
+    serviceChargeWaived: boolean;
+    labourChargeWaived: boolean;
+    sparePartsWaived: boolean;
+  } | null;
+}
+
 export const CustomerService = {
   getDashboard: (): Promise<CustomerDashboardData> =>
     apiClient.get("/mobile/customer/dashboard").then((r) => r.data.data),
@@ -194,7 +304,9 @@ export const CustomerService = {
   uploadProfilePhoto: (formData: FormData): Promise<{ profileImageUrl: string }> =>
     apiClient
       .post("/mobile/customer/profile/photo", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+        // Let axios/React Native generate the multipart boundary itself — pinning
+        // "multipart/form-data" without a boundary here produces a body the server can't parse.
+        headers: { "Content-Type": undefined },
       })
       .then((r) => r.data.data),
 
@@ -261,7 +373,7 @@ export const CustomerService = {
     apiClient.get("/mobile/customer/invoices").then((r) => r.data.data),
 
   getInvoiceDetails: (id: string): Promise<{
-    invoice: CustomerInvoice;
+    invoice: CustomerInvoiceDetail;
     tenant: {
       companyName: string;
       email: string;
@@ -276,6 +388,12 @@ export const CustomerService = {
 
   getAddresses: (): Promise<Address[]> =>
     apiClient.get("/mobile/customer/addresses").then((r) => r.data.data),
+
+  getAssets: (): Promise<CustomerAsset[]> =>
+    apiClient.get("/mobile/customer/assets").then((r) => r.data.data),
+
+  getAssetById: (id: string): Promise<CustomerAssetDetail> =>
+    apiClient.get(`/mobile/customer/assets/${id}`).then((r) => r.data.data),
 
   getCategories: (): Promise<any[]> =>
     apiClient.get("/categories").then((r) => r.data.data),

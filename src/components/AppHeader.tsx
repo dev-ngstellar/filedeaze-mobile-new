@@ -1,13 +1,17 @@
 import React from "react";
 import { View, Text, StyleSheet, Pressable, Image, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft } from "lucide-react-native";
+import { ArrowLeft, Bell } from "lucide-react-native";
 import { useTheme } from "../theme";
 import { APP_CONFIG } from "../config/app.config";
+import { useNavigation } from "@react-navigation/native";
+import { useAuthStore } from "../store/auth.store";
+import { useUnreadNotificationCount } from "../hooks/useNotifications";
 
 interface AppHeaderProps {
   title?: string;
   subtitle?: string;
+  /** Explicitly control the back arrow. Defaults to auto (true when navigation can go back). */
   showBack?: boolean;
   onBackPress?: () => void;
   rightAction?: React.ReactNode;
@@ -18,7 +22,7 @@ interface AppHeaderProps {
 export const AppHeader: React.FC<AppHeaderProps> = ({
   title,
   subtitle,
-  showBack = false,
+  showBack,
   onBackPress,
   rightAction,
   leftAction,
@@ -26,6 +30,65 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 }) => {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const { user } = useAuthStore();
+  const unreadNotifCount = useUnreadNotificationCount();
+
+  // Auto-detect navigation so we never need to pass showBack manually on child screens.
+  // Wrapped in try/catch because AppHeader is sometimes rendered outside a navigator context.
+  let canGoBack = false;
+  let defaultGoBack: (() => void) | undefined;
+  let nav: any;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    nav = useNavigation();
+    canGoBack = nav.canGoBack();
+    defaultGoBack = () => nav.goBack();
+  } catch {
+    // not inside a navigator — keep defaults
+  }
+
+  // Resolve whether to show back arrow:
+  //   • If showBack is explicitly set (true/false), honour it.
+  //   • Otherwise show it automatically when the stack can go back.
+  const resolvedShowBack = showBack !== undefined ? showBack : canGoBack;
+  const resolvedOnBackPress = onBackPress ?? defaultGoBack;
+
+  const isCustomer = user?.role === "CUSTOMER";
+  const currentRouteName = nav?.getCurrentRoute?.()?.name;
+  const showBell = isCustomer && currentRouteName !== "NotificationList" && title !== "Notifications";
+
+  const handleNotificationPress = () => {
+    if (nav) {
+      nav.navigate("NotificationList");
+    }
+  };
+
+  const renderRightAction = () => {
+    if (showBell) {
+      return (
+        <View style={styles.rightActionRow}>
+          <Pressable
+            onPress={handleNotificationPress}
+            style={({ pressed }) => [
+              styles.bellButton,
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Bell color={theme.colors.text} size={22} />
+            {unreadNotifCount > 0 && (
+              <View style={[styles.notifBadge, { backgroundColor: theme.colors.danger }]}>
+                <Text style={styles.notifBadgeText}>
+                  {unreadNotifCount > 9 ? "9+" : unreadNotifCount}
+                </Text>
+              </View>
+            )}
+          </Pressable>
+          {rightAction}
+        </View>
+      );
+    }
+    return rightAction;
+  };
 
   return (
     <View
@@ -46,9 +109,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       <View style={styles.contentRow}>
         {leftAction && <View style={styles.leftActionContainer}>{leftAction}</View>}
 
-        {showBack ? (
+        {resolvedShowBack ? (
           <Pressable
-            onPress={onBackPress}
+            onPress={resolvedOnBackPress}
             style={({ pressed }) => [
               styles.backButton,
               pressed && { opacity: 0.7 },
@@ -131,8 +194,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           )}
         </View>
 
-        {rightAction ? (
-          <View style={styles.rightActionContainer}>{rightAction}</View>
+        {showBell || rightAction ? (
+          <View style={styles.rightActionContainer}>{renderRightAction()}</View>
         ) : (
           <View style={styles.rightActionPlaceholder} />
         )}
@@ -210,6 +273,33 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "flex-start",
     marginRight: 6,
+  },
+  rightActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  bellButton: {
+    padding: 6,
+    position: "relative",
+  },
+  notifBadge: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+    zIndex: 10,
+  },
+  notifBadgeText: {
+    color: "#ffffff",
+    fontSize: 9,
+    fontWeight: "700" as const,
+    lineHeight: 11,
   },
 });
 export default AppHeader;

@@ -16,6 +16,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import {
@@ -38,6 +39,7 @@ import {
   Bell,
   Sparkles,
   UserCheck,
+  Shield,
 } from "lucide-react-native";
 
 import { useTheme } from "../../theme";
@@ -50,6 +52,7 @@ import {
   useUploadCustomerProfilePhoto,
   useCustomerPayments,
   useCategories,
+  useCustomerHasActiveAmc,
 } from "../../hooks/useCustomer";
 import { useUnreadNotificationCount } from "../../hooks/useNotifications";
 import { CustomerStackParamList } from "../../types/navigation.types";
@@ -62,12 +65,13 @@ import { AppButton } from "../../components/AppButton";
 import { AppInput } from "../../components/AppInput";
 import { CustomerPopup } from "../../components/CustomerPopup";
 import { LinearGradient } from "expo-linear-gradient";
+import { CustomerAssetsScreen } from "./CustomerAssetsScreen";
 
 type NavigationProp = NativeStackNavigationProp<
   CustomerStackParamList,
   "CustomerHome"
 >;
-type CustomerTab = "HOME" | "TICKETS" | "INVOICES" | "PROFILE" | "PAYMENTS";
+type CustomerTab = "HOME" | "TICKETS" | "AMC" | "PAYMENTS" | "INVOICES" | "PROFILE";
 
 export const CustomerHomeScreen = () => {
   const theme = useTheme();
@@ -118,6 +122,9 @@ export const CustomerHomeScreen = () => {
   const updateProfileMutation = useUpdateCustomerProfile();
   const uploadPhotoMutation = useUploadCustomerProfilePhoto();
   const unreadNotifCount = useUnreadNotificationCount();
+
+  // Central AMC status — drives the bottom nav (Assets vs Tickets) and header ticket icon.
+  const { hasActiveAmc } = useCustomerHasActiveAmc();
 
   // Form states
   const [name, setName] = useState("");
@@ -181,7 +188,7 @@ export const CustomerHomeScreen = () => {
   const handlePickPhoto = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: "images",
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.5,
@@ -189,10 +196,25 @@ export const CustomerHomeScreen = () => {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
+
+        // Downscale before upload — sending a raw multi-megapixel camera-roll photo as an avatar
+        // is unnecessary and, combined with repeated picks, is a known source of the app crashing
+        // and reloading on lower-end Android devices.
+        let uploadUri = asset.uri;
+        try {
+          const context = ImageManipulator.manipulate(asset.uri);
+          context.resize({ width: 800 });
+          const rendered = await context.renderAsync();
+          const compressed = await rendered.saveAsync({ compress: 0.6, format: SaveFormat.JPEG });
+          uploadUri = compressed.uri;
+        } catch (compressionError) {
+          console.error("Failed to compress profile photo:", compressionError);
+        }
+
         const formData = new FormData();
         formData.append("photo", {
-          uri: Platform.OS === "ios" ? asset.uri.replace("file://", "") : asset.uri,
-          type: asset.mimeType || "image/jpeg",
+          uri: Platform.OS === "ios" ? uploadUri.replace("file://", "") : uploadUri,
+          type: "image/jpeg",
           name: asset.fileName || "profile_photo.jpg",
         } as any);
 
@@ -391,16 +413,40 @@ export const CustomerHomeScreen = () => {
         style={[styles.container, { backgroundColor: theme.colors.background }]}
       >
         <AppHeader
-          showTenantBranding={activeTab !== "PROFILE"}
-          showBack={activeTab === "PROFILE"}
+          showTenantBranding={activeTab !== "PROFILE" && activeTab !== "TICKETS"}
+          showBack={activeTab === "PROFILE" || activeTab === "TICKETS"}
           onBackPress={() => {
-            if (navigation.canGoBack()) {
+            if (activeTab === "TICKETS") {
+              setActiveTab("HOME");
+            } else if (navigation.canGoBack()) {
               navigation.goBack();
             } else {
               setActiveTab("HOME");
             }
           }}
-          title={activeTab === "PROFILE" ? "Profile Details" : undefined}
+          title={
+            activeTab === "PROFILE"
+              ? "Profile Details"
+              : activeTab === "TICKETS"
+              ? "Service History"
+              : undefined
+          }
+          rightAction={
+            // Customers without an active AMC reach Tickets via its own bottom tab — showing this
+            // icon too would give them two paths to the same screen. AMC customers keep it as-is,
+            // since Tickets stays a header-only destination for them (Assets owns the bottom tab).
+            hasActiveAmc && activeTab !== "PROFILE" && activeTab !== "TICKETS" ? (
+              <Pressable
+                onPress={() => setActiveTab("TICKETS")}
+                style={({ pressed }) => [
+                  { padding: 8 },
+                  pressed && { opacity: 0.7 },
+                ]}
+              >
+                <ClipboardList size={22} color={theme.colors.primary} />
+              </Pressable>
+            ) : undefined
+          }
         />
 
         {/* Reusable Customer Logout Popup */}
@@ -447,19 +493,6 @@ export const CustomerHomeScreen = () => {
                     </Text>
                   </View>
                 </View>
-                <Pressable
-                  style={[styles.locationBellBtn, { backgroundColor: `${theme.colors.primary}14` }]}
-                  onPress={() => navigation.navigate("NotificationList")}
-                >
-                  <Bell size={19} color={theme.colors.primary} />
-                  {unreadNotifCount > 0 && (
-                    <View style={[styles.notifBadge, { backgroundColor: theme.colors.danger }]}>
-                      <Text style={styles.notifBadgeText}>
-                        {unreadNotifCount > 9 ? "9+" : unreadNotifCount}
-                      </Text>
-                    </View>
-                  )}
-                </Pressable>
               </View>
 
               {/* Search Bar + Dropdown */}
@@ -722,6 +755,10 @@ export const CustomerHomeScreen = () => {
                 </View>
               )}
             </View>
+          )}
+
+          {activeTab === "AMC" && (
+            <CustomerAssetsScreen />
           )}
 
           {activeTab === "TICKETS" && (
@@ -1286,12 +1323,21 @@ export const CustomerHomeScreen = () => {
             </View>
             <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "HOME" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "HOME" ? "700" : "500" }]}>Home</Text>
           </Pressable>
-          <Pressable style={styles.navItem} onPress={() => setActiveTab("TICKETS")}>
-            <View style={[styles.navIconWrap, activeTab === "TICKETS" && { backgroundColor: `${theme.colors.primary}18` }]}>
-              <ClipboardList size={tabIconSize} color={activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted} />
-            </View>
-            <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "TICKETS" ? "700" : "500" }]}>Tickets</Text>
-          </Pressable>
+          {hasActiveAmc ? (
+            <Pressable style={styles.navItem} onPress={() => setActiveTab("AMC")}>
+              <View style={[styles.navIconWrap, activeTab === "AMC" && { backgroundColor: `${theme.colors.primary}18` }]}>
+                <Shield size={tabIconSize} color={activeTab === "AMC" ? theme.colors.primary : theme.colors.textMuted} />
+              </View>
+              <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "AMC" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "AMC" ? "700" : "500" }]}>Assets</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.navItem} onPress={() => setActiveTab("TICKETS")}>
+              <View style={[styles.navIconWrap, activeTab === "TICKETS" && { backgroundColor: `${theme.colors.primary}18` }]}>
+                <ClipboardList size={tabIconSize} color={activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted} />
+              </View>
+              <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "TICKETS" ? "700" : "500" }]}>Tickets</Text>
+            </Pressable>
+          )}
           <Pressable style={styles.navItem} onPress={() => setActiveTab("PAYMENTS")}>
             <View style={[styles.navIconWrap, activeTab === "PAYMENTS" && { backgroundColor: `${theme.colors.primary}18` }]}>
               <CreditCard size={tabIconSize} color={activeTab === "PAYMENTS" ? theme.colors.primary : theme.colors.textMuted} />

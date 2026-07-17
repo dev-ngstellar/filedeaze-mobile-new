@@ -24,7 +24,7 @@ export const CustomerDashboardScreen = () => {
   if (isLoading) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <AppHeader title="Customer Portal" />
+        <AppHeader title="Customer Portal" showBack={false} />
         <AppLoader message="Loading dashboard..." />
       </View>
     );
@@ -38,6 +38,7 @@ export const CustomerDashboardScreen = () => {
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <AppHeader
         title="FieldEaze"
+        showBack={false}
         showTenantBranding
         rightAction={
           <Pressable onPress={logout} style={({ pressed }) => [styles.logoutButton, pressed && { opacity: 0.7 }]}>

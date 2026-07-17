@@ -13,6 +13,8 @@ export const customerKeys = {
   invoices: () => [...customerKeys.all, "invoices"] as const,
   invoice: (id: string) => [...customerKeys.all, "invoice", id] as const,
   addresses: () => [...customerKeys.all, "addresses"] as const,
+  assets: () => [...customerKeys.all, "assets"] as const,
+  asset: (id: string) => [...customerKeys.all, "assets", id] as const,
   categories: () => ["categories"] as const,
   category: (id: string) => ["category", id] as const,
 };
@@ -192,6 +194,31 @@ export function useCategoryDetails(id: string) {
   return useQuery({
     queryKey: customerKeys.category(id),
     queryFn: () => CustomerService.getCategoryDetails(id),
+    enabled: !!id,
+  });
+}
+
+export function useCustomerAssets() {
+  return useQuery({
+    queryKey: customerKeys.assets(),
+    queryFn: () => CustomerService.getAssets(),
+  });
+}
+
+/** Central source of truth for "does this customer have an active AMC on any asset" —
+ * drives the bottom navigation (Assets tab vs Tickets tab) and header ticket icon. Derived from
+ * the same assets query used by the Assets screen (shared cache — no duplicate network call),
+ * so it recomputes automatically after login or whenever asset/AMC data is refetched. */
+export function useCustomerHasActiveAmc() {
+  const { data: assets, isLoading, isFetched } = useCustomerAssets();
+  const hasActiveAmc = !!assets?.some((asset) => asset.hasActiveAmc);
+  return { hasActiveAmc, isLoading, isFetched };
+}
+
+export function useCustomerAssetDetail(id: string) {
+  return useQuery({
+    queryKey: customerKeys.asset(id),
+    queryFn: () => CustomerService.getAssetById(id),
     enabled: !!id,
   });
 }

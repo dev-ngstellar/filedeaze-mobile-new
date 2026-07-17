@@ -21,7 +21,9 @@ export type CustomerStackParamList = {
   CustomerHome: undefined;
   CustomerJobDetails: { jobId: string };
   CustomerDashboard: undefined;
-  RaiseTicket: { categoryId?: string; categoryName?: string } | undefined;
+  RaiseTicket:
+    | { categoryId?: string; categoryName?: string; assetId?: string; assetName?: string }
+    | undefined;
   TicketHistory: undefined;
   CustomerTicketDetails: { ticketId: string };
   LiveTracking: { ticketId: string; ticketNumber?: string; hasFeedback?: boolean };
@@ -31,6 +33,9 @@ export type CustomerStackParamList = {
   Feedback: { ticketId: string; ticketNumber: string };
   AddressBook: { onSelectAddress?: (address: Address) => void; selectedAddressId?: string } | undefined;
   NotificationList: undefined;
+  CustomerAssets: undefined;
+  MyAmc: undefined;
+  AmcDetails: { subscriptionId: string };
 };
 
 export type TechnicianStackParamList = {

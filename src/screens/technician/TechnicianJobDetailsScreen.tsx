@@ -54,7 +54,7 @@ import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useTheme } from "../../theme";
 import { apiClient } from "../../api/client";
 import { TechnicianStackParamList } from "../../types/navigation.types";
-import { TicketStatus, JobService } from "../../services/job.service";
+import { TicketStatus, JobService, SparePartUsageDraft, CollectPaymentResult } from "../../services/job.service";
 import { PaymentService, PlatformCharges, MobilePaymentConfig } from "../../services/payment.service";
 import {
   useJobDetails,
@@ -64,6 +64,7 @@ import {
   useMarkJobPending,
   useRejectJob,
   useCollectPayment,
+  usePaymentPreview,
   useUploadTicketImage,
   useTechnicianJobs,
   useAttendanceStatus,
@@ -77,7 +78,9 @@ import { AppButton } from "../../components/AppButton";
 import { AppInput } from "../../components/AppInput";
 import { AppConfirmModal } from "../../components/AppConfirmModal";
 import { AppSuccessModal } from "../../components/AppSuccessModal";
-import { PaymentBreakdownCard } from "../../components/PaymentBreakdownCard";
+import { SparePartsSection, validateSparePartDrafts } from "../../components/warranty/SparePartsSection";
+import { PaymentSummaryCard } from "../../components/warranty/PaymentSummaryCard";
+import { getWarrantyStatus } from "../../utils";
 
 type RouteProps = RouteProp<TechnicianStackParamList, "TechnicianJobDetails">;
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "TechnicianJobDetails">;
@@ -190,6 +193,16 @@ export const TechnicianJobDetailsScreen = () => {
   const [remarks, setRemarks] = useState("");
   const [hasSigned, setHasSigned] = useState(false);
 
+  // Spare parts / warranty state — completion-time (sent as sparePartsUsed on complete()) and
+  // payment-time (split into warrantyParts/nonWarrantyParts on collectPayment()) are kept separate
+  // since they're two different backend calls with two different payload shapes.
+  const [completionSpareParts, setCompletionSpareParts] = useState<SparePartUsageDraft[]>([]);
+  const [completionSparePartsInvalid, setCompletionSparePartsInvalid] = useState<Set<string>>(new Set());
+  const [paymentSpareParts, setPaymentSpareParts] = useState<SparePartUsageDraft[]>([]);
+  const [paymentSparePartsInvalid, setPaymentSparePartsInvalid] = useState<Set<string>>(new Set());
+  const [paymentResult, setPaymentResult] = useState<CollectPaymentResult | null>(null);
+  const [paymentSuccessVisible, setPaymentSuccessVisible] = useState(false);
+
   // Complete Payment Collection state
   const [paymentMode, setPaymentMode] = useState<"CASH" | "UPI">("CASH");
   const [amountStr, setAmountStr] = useState("");
@@ -258,6 +271,18 @@ export const TechnicianJobDetailsScreen = () => {
   const amount = Math.max(0, Math.round(totalAmount * 100) / 100);
 
   const currencySymbol = paymentConfig?.currency === "INR" ? "₹" : (paymentConfig?.currency || "₹");
+
+  // Everything technician-entered outside the core service charge (named extra items + tenant
+  // platform/shipping/handling fees) is billed via the backend's generic additionalCharge bucket.
+  const backendAdditionalCharge = extraChargesSum + platformFee + shippingCharge + handlingCharge;
+
+  // Backend-computed breakdown for the payment step — AMC service/labour waivers are applied here,
+  // never on device. Only fetched once the technician has entered a charge and the form is open.
+  const { data: paymentPreview } = usePaymentPreview(
+    jobId,
+    { serviceCharge: base, additionalCharge: backendAdditionalCharge, discount: discountAmount },
+    completeFormVisible && base > 0
+  );
 
   // Reached Location GPS State
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>({ lat: 28.6139, lng: 77.2090 });
@@ -789,6 +814,14 @@ export const TechnicianJobDetailsScreen = () => {
       return;
     }
 
+    const sparePartsValidation = validateSparePartDrafts(completionSpareParts);
+    if (sparePartsValidation) {
+      setCompletionSparePartsInvalid(sparePartsValidation.invalidIds);
+      showAlert("Spare Parts Incomplete", sparePartsValidation.message);
+      return;
+    }
+    setCompletionSparePartsInvalid(new Set());
+
     setSubmitting(true);
     try {
       // 1. Upload all after photos sequentially
@@ -810,6 +843,11 @@ export const TechnicianJobDetailsScreen = () => {
           duration: liveDuration || "—",
           lat: gpsCoords?.lat ?? 28.6139,
           lng: gpsCoords?.lng ?? 77.2090,
+          sparePartsUsed: completionSpareParts.map((p) => ({
+            sparePartId: p.sparePartId,
+            quantity: p.quantity,
+            warrantyStatus: p.warrantyStatus!,
+          })),
         },
       });
 
@@ -883,27 +921,33 @@ export const TechnicianJobDetailsScreen = () => {
       return;
     }
 
+    const sparePartsValidation = validateSparePartDrafts(paymentSpareParts);
+    if (sparePartsValidation) {
+      setPaymentSparePartsInvalid(sparePartsValidation.invalidIds);
+      showAlert("Spare Parts Incomplete", sparePartsValidation.message);
+      return;
+    }
+    setPaymentSparePartsInvalid(new Set());
+
+    const warrantyParts = paymentSpareParts
+      .filter((p) => p.warrantyStatus === "WARRANTY")
+      .map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }));
+    const nonWarrantyParts = paymentSpareParts
+      .filter((p) => p.warrantyStatus === "OUT_OF_WARRANTY")
+      .map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }));
+
     setSubmitting(true);
     try {
       // 3. Collect payment
       const payResult = await collectPaymentMutation.mutateAsync({
         ticketNo: jobId,
         payload: {
+          serviceCharge: base,
+          additionalCharge: backendAdditionalCharge,
+          discount: discountAmount,
+          warrantyParts,
+          nonWarrantyParts,
           method: paymentMode,
-          amount: amount,
-          baseAmount,
-          platformFee,
-          shippingCharge,
-          handlingCharge,
-          subtotal,
-          gstEnabled,
-          gstPercent,
-          gstAmount,
-          discountAmount,
-          totalAmount: amount,
-          collectedAmount: amount,
-          upiId: paymentConfig?.upiId || undefined,
-          currency: paymentConfig?.currency || "INR",
         },
       });
 
@@ -920,17 +964,11 @@ export const TechnicianJobDetailsScreen = () => {
       queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
 
-      // invoice generated
-      setSuccessTitle("Payment & Invoice Success ✓");
-      setSuccessMessage("Payment collected and invoice generated successfully.");
+      // invoice generated — show the full backend-returned breakdown, not the generic success dialog
+      setPaymentResult(payResult);
       setCompleteFormVisible(false);
-      setSuccessVisible(true);
+      setPaymentSuccessVisible(true);
       await refetch();
-
-      // Navigate to Home screen after 5 seconds
-      setTimeout(() => {
-        navigation.navigate("TechnicianHome");
-      }, 5000);
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to collect payment.");
     } finally {
@@ -999,6 +1037,31 @@ export const TechnicianJobDetailsScreen = () => {
     }
   };
 
+  const parseDescriptionAndNotes = (desc: string) => {
+    if (!desc) return { cleanedDescription: "", notes: [] as string[] };
+    const parts = desc.split(/Image Notes\s*:\s*/i);
+    const cleanedDescription = parts[0].replace(/\n+$/, "").trim();
+    const notes = parts.slice(1).map(p => p.trim());
+    return { cleanedDescription, notes };
+  };
+
+  const { cleanedDescription, notes } = parseDescriptionAndNotes(job.description);
+
+  const formatWarrantyDate = (dateStr?: string) => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    } catch {
+      return "";
+    }
+  };
+
   const activeStep = getActiveStep(job.status);
   const steps = ["Assigned", "Accepted", "Travel", "Reached", "Working", "Completed", "Closed"];
 
@@ -1037,9 +1100,13 @@ export const TechnicianJobDetailsScreen = () => {
           >
             {job.service}
           </Text>
-          <Text style={[styles.jobDesc, { color: theme.colors.textMuted, marginBottom: 12 }]}>
-            {job.description}
-          </Text>
+
+          <View style={styles.descContainer}>
+            <Text style={[styles.descTitle, { color: theme.colors.text }]}>Description</Text>
+            <Text style={[styles.descBody, { color: theme.colors.text }]}>
+              {cleanedDescription}
+            </Text>
+          </View>
 
           <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
 
@@ -1068,7 +1135,108 @@ export const TechnicianJobDetailsScreen = () => {
               </Text>
             </View>
           </View>
+
+          <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
+
+          <View style={styles.infoRow}>
+            <View style={[styles.iconBox, { backgroundColor: `${theme.colors.primary}12` }]}>
+              <ShieldCheck size={18} color={theme.colors.primary} />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%", paddingRight: 8 }}>
+                <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Asset Information</Text>
+                {(() => {
+                  if (!job.customerAsset) return null;
+                  if (!job.customerAsset.warrantyExpiresAt) {
+                    return (
+                      <View style={[styles.warrantyBadge, { backgroundColor: "#9ca3af" }]}>
+                        <Text style={styles.warrantyBadgeText}>Warranty Unknown</Text>
+                      </View>
+                    );
+                  }
+                  const status = getWarrantyStatus(job.customerAsset.warrantyExpiresAt);
+                  return (
+                    <View style={[styles.warrantyBadge, { backgroundColor: status.badgeBg }]}>
+                      <Text style={styles.warrantyBadgeText}>{status.label}</Text>
+                    </View>
+                  );
+                })()}
+              </View>
+              <Text style={[styles.infoValue, { color: theme.colors.text, fontWeight: "700" }]}>
+                {job.customerAsset?.name || "No Asset Linked"}
+              </Text>
+              {job.customerAsset ? (
+                <>
+                  {(job.customerAsset.brand || job.customerAsset.model) ? (
+                    <Text style={{ color: theme.colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                      {job.customerAsset.brand ?? "—"} · {job.customerAsset.model ?? "—"}
+                    </Text>
+                  ) : null}
+                  {job.customerAsset.serialNumber ? (
+                    <Text style={{ color: theme.colors.textMuted, fontSize: 11, marginTop: 1 }}>
+                      S/N: {job.customerAsset.serialNumber}
+                    </Text>
+                  ) : null}
+                  {job.customerAsset.warrantyExpiresAt ? (
+                    <View style={{ marginTop: 6 }}>
+                      <Text style={[styles.infoLabel, { color: theme.colors.textMuted, fontSize: 10 }]}>Warranty Expires</Text>
+                      <Text style={[styles.infoValue, { color: theme.colors.text, fontSize: 13, fontWeight: "600", marginTop: 2 }]}>
+                        {formatWarrantyDate(job.customerAsset.warrantyExpiresAt)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
+          </View>
         </AppCard>
+
+        {/* AMC Coverage Card — only rendered when this ticket is billed under an AMC contract */}
+        {job.isAmcCovered && job.amcStatus ? (
+          <>
+            <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>AMC Coverage</Text>
+            <AppCard style={styles.card}>
+              <View style={styles.infoRow}>
+                <View style={[styles.iconBox, { backgroundColor: `${theme.colors.success}12` }]}>
+                  <ShieldCheck size={18} color={theme.colors.success} />
+                </View>
+                <View style={styles.infoTextContainer}>
+                  <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Plan</Text>
+                  <Text style={[styles.infoValue, { color: theme.colors.text, fontWeight: "700" }]}>
+                    {job.amcStatus.planName}
+                  </Text>
+                </View>
+                <AppBadge label="AMC JOB" variant="success" />
+              </View>
+
+              <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
+
+              <View style={styles.infoRow}>
+                <View style={[styles.iconBox, { backgroundColor: `${theme.colors.success}12` }]}>
+                  <CheckCircle2 size={18} color={theme.colors.success} />
+                </View>
+                <View style={styles.infoTextContainer}>
+                  <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Status</Text>
+                  <Text style={[styles.infoValue, { color: theme.colors.text }]}>{job.amcStatus.status}</Text>
+                </View>
+              </View>
+
+              <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />
+
+              <View style={styles.infoRow}>
+                <View style={[styles.iconBox, { backgroundColor: `${theme.colors.success}12` }]}>
+                  <Tag size={18} color={theme.colors.success} />
+                </View>
+                <View style={styles.infoTextContainer}>
+                  <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Remaining Visits</Text>
+                  <Text style={[styles.infoValue, { color: theme.colors.text, fontWeight: "700" }]}>
+                    {job.amcStatus.remainingVisits}
+                  </Text>
+                </View>
+              </View>
+            </AppCard>
+          </>
+        ) : null}
 
         {/* Customer Details Card */}
         <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>Customer Details</Text>
@@ -1163,41 +1331,50 @@ export const TechnicianJobDetailsScreen = () => {
         {job.images && job.images.length > 0 && job.status !== "COMPLETED" && job.status !== "TICKET_CLOSED" && job.status !== "INVOICE_GENERATED" && (
           <>
             <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>Attached Media</Text>
-            <View style={styles.photoGrid}>
+            <View style={{ gap: 16, marginVertical: 12 }}>
               {job.images.map((imgUrl, index) => {
                 const isVideo = isVideoUrl(imgUrl);
-                if (isVideo) {
-                  return (
-                    <Pressable
-                      key={index}
-                      onPress={() => Linking.openURL(imgUrl)}
-                      style={[styles.photoThumbnail, {
-                        backgroundColor: "#0f172a",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderWidth: 1,
-                        borderColor: theme.colors.borderLight,
-                      }]}
-                    >
-                      <Play size={24} color="#ffffff" fill="#ffffff" />
-                      <Text style={{ fontSize: 9, color: "#ffffff", fontWeight: "700", marginTop: 4 }}>Play Video</Text>
-                    </Pressable>
-                  );
-                }
+                const note = notes[index];
+                const hasNote = note && note.trim() !== "";
                 return (
-                  <Pressable
-                    key={index}
-                    onPress={() => Linking.openURL(imgUrl)}
-                    style={({ pressed }) => [
-                      styles.photoThumbnail,
-                      pressed && { opacity: 0.8 },
-                    ]}
-                  >
-                    <Image
-                      source={{ uri: imgUrl }}
-                      style={{ width: "100%", height: "100%", borderRadius: 8 }}
-                    />
-                  </Pressable>
+                  <View key={index} style={{ flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                    {isVideo ? (
+                      <Pressable
+                        onPress={() => Linking.openURL(imgUrl)}
+                        style={[styles.photoThumbnail, {
+                          backgroundColor: "#0f172a",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          borderWidth: 1,
+                          borderColor: theme.colors.borderLight,
+                        }]}
+                      >
+                        <Play size={24} color="#ffffff" fill="#ffffff" />
+                        <Text style={{ fontSize: 9, color: "#ffffff", fontWeight: "700", marginTop: 4 }}>Play Video</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        onPress={() => Linking.openURL(imgUrl)}
+                        style={({ pressed }) => [
+                          styles.photoThumbnail,
+                          pressed && { opacity: 0.8 },
+                        ]}
+                      >
+                        <Image
+                          source={{ uri: imgUrl }}
+                          style={{ width: "100%", height: "100%", borderRadius: 8 }}
+                        />
+                      </Pressable>
+                    )}
+                    {hasNote ? (
+                      <View style={{ marginTop: 2, paddingLeft: 4 }}>
+                        <Text style={[styles.infoLabel, { color: theme.colors.textMuted, fontSize: 10, marginBottom: 2 }]}>Image Notes</Text>
+                        <Text style={[styles.infoValue, { color: theme.colors.text, fontSize: 13 }]}>
+                          {note}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
                 );
               })}
             </View>
@@ -1398,20 +1575,13 @@ export const TechnicianJobDetailsScreen = () => {
           </AppCard>
         )}
 
-        {/* 6. TICKET_CLOSED / INVOICE_GENERATED */}
+        {/* 6. TICKET_CLOSED / INVOICE_GENERATED — real persisted invoice/payment fields only,
+             never back-calculated (there used to be a base-price-minus-subtotal approximation
+             here to guess a spare-parts amount; that's gone now that the backend exposes the
+             real per-line invoice fields). */}
         {(job.status === "TICKET_CLOSED" || job.status === "INVOICE_GENERATED") && (() => {
-          const invTotal = job.invoiceSubtotal ?? job.paymentCollection ?? 0;
-          const gstPrcnt = job.invoiceGstPercent ?? 0;
-          const invBase = Math.round((invTotal / (1 + gstPrcnt/100)) * 100) / 100;
-          const invGst = Math.round((invTotal - invBase) * 100) / 100;
-          const invDate = job.invoiceGeneratedAt ? new Date(job.invoiceGeneratedAt).toLocaleDateString("en-IN") : new Date().toLocaleDateString("en-IN");
+          const invDate = job.invoiceGeneratedAt ? new Date(job.invoiceGeneratedAt).toLocaleDateString("en-IN") : "—";
           const invNum = job.invoiceNo || `INV-${job.ticketNo}`;
-          
-          const ticketBasePrice = job?.serviceCharge ?? job?.categoryPrice ?? 0;
-          const sparesAmount = (ticketBasePrice > 0 && invBase > ticketBasePrice) 
-            ? Math.round((invBase - ticketBasePrice) * 100) / 100 
-            : 0;
-          const displayBaseAmount = sparesAmount > 0 ? ticketBasePrice : invBase;
 
           return (
             <View>
@@ -1429,20 +1599,24 @@ export const TechnicianJobDetailsScreen = () => {
                 </View>
               </AppCard>
 
-              <PaymentBreakdownCard
-                invoiceNo={invNum}
-                ticketNo={job.ticketNo}
+              <PaymentSummaryCard
+                invoiceNumber={invNum}
+                ticketNumber={job.ticketNo}
                 customerName={job.customerName}
-                baseAmount={displayBaseAmount}
-                extraCharges={sparesAmount}
-                gstEnabled={gstPrcnt > 0}
-                gstPercent={gstPrcnt}
-                gstAmount={invGst}
-                totalAmount={invTotal}
-                collectedAmount={invTotal}
                 paymentMode={job.paymentMethod ?? "—"}
-                paymentStatus="Collected"
+                paymentStatus={job.paymentStatus ?? "Collected"}
                 invoiceDate={invDate}
+                serviceCharge={job.invoiceServiceCharge ?? 0}
+                serviceChargeWaived={job.paymentServiceChargeWaived}
+                labourCharge={job.invoiceLabourCharge ?? 0}
+                labourChargeWaived={job.paymentLabourChargeWaived}
+                sparePartsAmount={job.invoiceSparePartsAmount ?? 0}
+                additionalCharge={job.invoiceAdditionalCharge}
+                discount={job.invoiceDiscount}
+                subtotal={job.invoiceSubtotal}
+                gstPercent={job.invoiceGstPercent}
+                gstAmount={job.invoiceGstAmount}
+                grandTotal={job.invoiceTotal ?? job.paymentCollection ?? 0}
                 currency={currencySymbol}
                 onViewInvoice={() => navigation.navigate("InvoiceGenerate", {
                   jobId: job.id,
@@ -1941,6 +2115,16 @@ export const TechnicianJobDetailsScreen = () => {
                           )}
                         </View>
                       </View>
+
+                      {/* Spare Parts Used — mandatory per-part warranty status, sent as sparePartsUsed on complete() */}
+                      <SparePartsSection
+                        subCategoryId={job?.subCategoryId}
+                        items={completionSpareParts}
+                        onChange={setCompletionSpareParts}
+                        title="Spare Parts Used"
+                        subtitle="Optional — tag each part's warranty status if any were used."
+                        invalidIds={completionSparePartsInvalid}
+                      />
                     </View>
                   </View>
                 )}
@@ -2075,63 +2259,53 @@ export const TechnicianJobDetailsScreen = () => {
                       </View>
                     ))}
 
-                    {/* Total billing breakdown */}
-                    <View style={{ marginTop: 14, padding: 14, borderRadius: 12, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#e2e8f0" }}>
-                      <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                        <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Service Amount</Text>
-                        <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{base.toLocaleString("en-IN")}</Text>
+                    {/* Add Spare Part during payment — backend supports this independent of completion-time parts */}
+                    {job?.status === "COMPLETED" && (
+                      <SparePartsSection
+                        subCategoryId={job?.subCategoryId}
+                        items={paymentSpareParts}
+                        onChange={setPaymentSpareParts}
+                        title="Add Spare Part"
+                        subtitle="Extra parts used while collecting payment — billed on submit."
+                        invalidIds={paymentSparePartsInvalid}
+                      />
+                    )}
+
+                    {/* Payment Preview — backend-computed breakdown, never recalculated on device */}
+                    {paymentPreview ? (
+                      <View style={{ marginTop: 14, marginBottom: 4 }}>
+                        <PaymentSummaryCard
+                          title="Payment Preview"
+                          serviceCharge={paymentPreview.serviceCharge}
+                          serviceChargeWaived={paymentPreview.serviceChargeWaived}
+                          labourCharge={paymentPreview.labourCharge}
+                          labourChargeWaived={paymentPreview.labourChargeWaived}
+                          sparePartsAmount={paymentPreview.sparePartsAmount}
+                          warrantyPartsValue={paymentPreview.warrantyPartsValue}
+                          additionalCharge={paymentPreview.additionalCharge}
+                          discount={paymentPreview.discount}
+                          subtotal={paymentPreview.subtotal}
+                          gstPercent={paymentPreview.gstPercent}
+                          gstAmount={paymentPreview.gstAmount}
+                          grandTotal={paymentPreview.grandTotal}
+                          currency={currencySymbol}
+                        />
+                        {paymentSpareParts.length > 0 ? (
+                          <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 8, paddingHorizontal: 2, lineHeight: 15 }}>
+                            The spare parts added above aren't reflected in this preview yet — they're billed when you submit payment.
+                          </Text>
+                        ) : null}
                       </View>
-                      
-                      {extraChargesSum > 0 && (
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Extra Charges Sum</Text>
-                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{extraChargesSum.toLocaleString("en-IN")}</Text>
-                        </View>
-                      )}
+                    ) : null}
 
-                      {platformCharges?.platformFee !== undefined && (
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Platform Fee</Text>
-                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{platformFee.toLocaleString("en-IN")}</Text>
-                        </View>
-                      )}
+                    {/* NOTE: the old client-computed "Total billing breakdown" box (Service Amount /
+                        Platform Fee / Tax / Total Payable) has been removed — it duplicated the
+                        Payment Preview card above with a second, client-calculated grand total.
+                        The Payment Preview card is now the ONLY payment summary shown here; it is
+                        fed entirely by the backend (previewPayment), including whatever platform
+                        fee/shipping/handling/discount apply, via the additionalCharge/discount
+                        params already passed to it below. */}
 
-                      {platformCharges?.shippingEnabled && (
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Shipping Charge</Text>
-                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{shippingCharge.toLocaleString("en-IN")}</Text>
-                        </View>
-                      )}
-
-                      {platformCharges?.handlingEnabled && (
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Handling Charge</Text>
-                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{handlingCharge.toLocaleString("en-IN")}</Text>
-                        </View>
-                      )}
-
-                      {(platformCharges?.dailyDiscountEnabled || platformCharges?.weeklyDiscountEnabled || platformCharges?.monthlyDiscountEnabled) && (
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.danger }}>Discount</Text>
-                          <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600" }}>-{currencySymbol}{discountAmount.toLocaleString("en-IN")}</Text>
-                        </View>
-                      )}
-
-                      {gstEnabled && (
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Tax ({gstPercent}%)</Text>
-                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600" }}>{currencySymbol}{gstAmount.toLocaleString("en-IN")}</Text>
-                        </View>
-                      )}
-                      
-                      <View style={{ height: 1, backgroundColor: "#cbd5e1", marginVertical: 8 }} />
-                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                        <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.text }}>Total Payable</Text>
-                        <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.primary }}>{currencySymbol}{amount.toLocaleString("en-IN")}</Text>
-                      </View>
-                    </View>
-
-                    
                     {/* Mode cash/upi */}
                     <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>
                     <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
@@ -2315,6 +2489,75 @@ export const TechnicianJobDetailsScreen = () => {
         }}
         autoCloseDelay={2000}
       />
+      {/* Payment Success Modal — full backend-returned breakdown, per PAYMENT SUCCESS requirements */}
+      <Modal visible={paymentSuccessVisible} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.6)", justifyContent: "center", alignItems: "center", padding: 16 }}>
+          <View style={{ width: "100%", maxWidth: 420, maxHeight: "90%" }}>
+            <AppCard style={{ width: "100%", padding: 16, backgroundColor: theme.colors.background, borderRadius: 16, maxHeight: "100%" }}>
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }}>
+                <View style={{ alignItems: "center", marginBottom: 16 }}>
+                  <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: `${theme.colors.success}15`, alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+                    <CheckCircle2 size={32} color={theme.colors.success} />
+                  </View>
+                  <Text style={{ fontSize: 17, fontWeight: "800", color: theme.colors.text }}>Payment Collected ✓</Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>Invoice generated successfully</Text>
+                </View>
+
+                {paymentResult ? (
+                  <>
+                    <AppCard style={{ padding: 14, marginBottom: 12 }}>
+                      <View style={styles.paymentMetaRow}>
+                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Invoice Number</Text>
+                        <Text style={[styles.paymentMetaValue, { color: theme.colors.text }]}>{paymentResult.invoiceNumber}</Text>
+                      </View>
+                      <View style={styles.paymentMetaRow}>
+                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Payment Method</Text>
+                        <Text style={[styles.paymentMetaValue, { color: theme.colors.text }]}>{paymentMode === "CASH" ? "Cash" : "UPI"}</Text>
+                      </View>
+                      <View style={styles.paymentMetaRow}>
+                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Invoice Date</Text>
+                        <Text style={[styles.paymentMetaValue, { color: theme.colors.text }]}>
+                          {new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                        </Text>
+                      </View>
+                      <View style={styles.paymentMetaRow}>
+                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Payment Status</Text>
+                        <Text style={[styles.paymentMetaValue, { color: theme.colors.success }]}>Collected</Text>
+                      </View>
+                    </AppCard>
+
+                    <PaymentSummaryCard
+                      serviceCharge={paymentResult.serviceCharge}
+                      serviceChargeWaived={paymentResult.serviceChargeWaived}
+                      labourCharge={paymentResult.labourCharge}
+                      labourChargeWaived={paymentResult.labourChargeWaived}
+                      sparePartsAmount={paymentResult.sparePartsAmount}
+                      warrantyPartsValue={paymentResult.warrantyPartsValue}
+                      additionalCharge={paymentResult.additionalCharge}
+                      discount={paymentResult.discount}
+                      subtotal={paymentResult.subtotal}
+                      gstPercent={paymentResult.gstPercent}
+                      gstAmount={paymentResult.gstAmount}
+                      grandTotal={paymentResult.grandTotal}
+                    />
+                  </>
+                ) : null}
+
+                <AppButton
+                  title="Done"
+                  onPress={() => {
+                    setPaymentSuccessVisible(false);
+                    setPaymentResult(null);
+                    navigation.navigate("TechnicianHome");
+                  }}
+                  style={{ marginTop: 16 }}
+                />
+              </ScrollView>
+            </AppCard>
+          </View>
+        </View>
+      </Modal>
+
       {/* App Alert Warning Modal */}
       <AppConfirmModal
         visible={alertModalVisible}
@@ -2337,6 +2580,19 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 40,
+  },
+  paymentMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  paymentMetaLabel: {
+    fontSize: 12,
+  },
+  paymentMetaValue: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   card: {
     marginBottom: 16,
@@ -2863,5 +3119,31 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     justifyContent: "center",
     alignItems: "center",
+  },
+  descContainer: {
+    marginTop: 8,
+    marginBottom: 14,
+  },
+  descTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  descBody: {
+    fontSize: 14,
+    fontWeight: "600",
+    lineHeight: 20,
+  },
+  warrantyBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 9999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  warrantyBadgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "500",
   },
 });

@@ -20,7 +20,7 @@ import { AppCard } from "../../components/AppCard";
 import { AppButton } from "../../components/AppButton";
 import { AppLoader } from "../../components/AppLoader";
 import { AppAlertModal } from "../../components/AppAlertModal";
-import { PaymentBreakdownCard } from "../../components/PaymentBreakdownCard";
+import { PaymentSummaryCard } from "../../components/warranty/PaymentSummaryCard";
 
 type RouteProps = RouteProp<TechnicianStackParamList, "InvoiceGenerate">;
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "InvoiceGenerate">;
@@ -39,31 +39,24 @@ export const InvoiceGenerateScreen = () => {
   const [alertMessage, setAlertMessage] = useState("");
   const [alertType, setAlertType] = useState<"success" | "error" | "warning">("success");
 
-  const amount = initialAmount || job?.paymentCollection || 0;
   const paymentMethod = initialPaymentMethod || job?.paymentMethod || "CASH";
 
-  const gstEnabled = job ? !!job.gstEnabled : false;
-  const percent = gstEnabled ? (job?.gstPercent != null ? job.gstPercent : 18) : 0;
-  const fallbackBase = Math.round((amount / (1 + percent / 100)) * 100) / 100;
-  const fallbackGst = Math.round((amount - fallbackBase) * 100) / 100;
-
-  // Use real DB values from API; fallback to client-side estimate only if missing
-  const baseAmount  = invoiceSubtotal  ?? fallbackBase;
-  const gstAmount   = baseAmount > 0 ? (invoiceGstAmount ?? fallbackGst) : 0;
-  const gstPercent  = invoiceGstPercent ?? percent;
-  const totalAmount = baseAmount > 0 
-    ? (invoiceTotal ?? amount) 
-    : (invoiceTotal ? Math.max(0, invoiceTotal - (invoiceGstAmount ?? fallbackGst)) : Math.max(0, amount - fallbackGst));
-  const invoiceDate = invoiceGeneratedAt
-    ? new Date(invoiceGeneratedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
-    : new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  // Real persisted invoice fields only — job (from useJobDetails) is authoritative once loaded;
+  // the route params are just what was known at the moment "View Invoice" was tapped, used only
+  // as a fallback before job finishes loading. Nothing here is calculated on device.
+  const serviceCharge = job?.invoiceServiceCharge ?? 0;
+  const labourCharge = job?.invoiceLabourCharge ?? 0;
+  const sparePartsAmount = job?.invoiceSparePartsAmount ?? 0;
+  const additionalCharge = job?.invoiceAdditionalCharge;
+  const discount = job?.invoiceDiscount;
+  const baseAmount = job?.invoiceSubtotal ?? invoiceSubtotal ?? 0;
+  const gstAmount = job?.invoiceGstAmount ?? invoiceGstAmount ?? 0;
+  const gstPercent = job?.invoiceGstPercent ?? invoiceGstPercent ?? 0;
+  const totalAmount = job?.invoiceTotal ?? invoiceTotal ?? initialAmount ?? 0;
+  const invoiceDate = (job?.invoiceGeneratedAt ?? invoiceGeneratedAt)
+    ? new Date(job?.invoiceGeneratedAt ?? invoiceGeneratedAt!).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+    : "—";
   const gstLabel = gstPercent > 0 ? `GST (${gstPercent}%)` : "GST";
-
-  const ticketBasePrice = job?.serviceCharge ?? job?.categoryPrice ?? 0;
-  const sparesAmount = (ticketBasePrice > 0 && baseAmount > ticketBasePrice) 
-    ? Math.round((baseAmount - ticketBasePrice) * 100) / 100 
-    : 0;
-  const displayBaseAmount = sparesAmount > 0 ? ticketBasePrice : baseAmount;
 
   const showAlert = (title: string, message: string, type: "success" | "error" | "warning" = "success") => {
     setAlertTitle(title);
@@ -137,33 +130,41 @@ export const InvoiceGenerateScreen = () => {
             <tbody>
               <tr>
                 <td>
-                  <strong>${service}</strong><br/>
+                  <strong>${service}${job?.paymentServiceChargeWaived ? " (Covered by AMC)" : ""}</strong><br/>
                   <span style="font-size: 12px; color: #6b7280;">${category}</span>
                 </td>
-                <td style="text-align: right;">Rs.${displayBaseAmount.toLocaleString('en-IN')}</td>
+                <td style="text-align: right;">${job?.paymentServiceChargeWaived ? "FREE" : `Rs.${serviceCharge.toLocaleString('en-IN')}`}</td>
               </tr>
-              ${sparesAmount > 0 ? `
+              ${labourCharge > 0 || job?.paymentLabourChargeWaived ? `
+              <tr>
+                <td><strong>Labour Charge${job?.paymentLabourChargeWaived ? " (Covered by AMC)" : ""}</strong></td>
+                <td style="text-align: right;">${job?.paymentLabourChargeWaived ? "FREE" : `Rs.${labourCharge.toLocaleString('en-IN')}`}</td>
+              </tr>
+              ` : ""}
+              ${sparePartsAmount > 0 ? `
               <tr>
                 <td>
-                  <strong>Extra Charges / Spares</strong><br/>
-                  <span style="font-size: 12px; color: #6b7280;">Additional parts or services</span>
+                  <strong>Chargeable Spare Parts</strong><br/>
+                  <span style="font-size: 12px; color: #6b7280;">Parts not covered under warranty</span>
                 </td>
-                <td style="text-align: right;">Rs.${sparesAmount.toLocaleString('en-IN')}</td>
+                <td style="text-align: right;">Rs.${sparePartsAmount.toLocaleString('en-IN')}</td>
               </tr>
               ` : ""}
             </tbody>
           </table>
-          
+
           <div class="totals">
             <table>
+              ${additionalCharge ? `
               <tr>
-                <td>Base Charges:</td>
-                <td>Rs.${displayBaseAmount.toLocaleString('en-IN')}</td>
+                <td>Additional Charges:</td>
+                <td>Rs.${additionalCharge.toLocaleString('en-IN')}</td>
               </tr>
-              ${sparesAmount > 0 ? `
+              ` : ""}
+              ${discount ? `
               <tr>
-                <td>Extra Charges / Spares:</td>
-                <td>Rs.${sparesAmount.toLocaleString('en-IN')}</td>
+                <td>Discount:</td>
+                <td>-Rs.${discount.toLocaleString('en-IN')}</td>
               </tr>
               ` : ""}
               ${gstAmount > 0 ? `
@@ -250,21 +251,25 @@ export const InvoiceGenerateScreen = () => {
           </Text>
         </View>
 
-        {/* Invoice Bill Format Sheet */}
-        <PaymentBreakdownCard
-          invoiceNo={invoiceNo}
-          ticketNo={ticketNo}
+        {/* Invoice Bill Format Sheet — single unified payment summary, backend fields only */}
+        <PaymentSummaryCard
+          invoiceNumber={invoiceNo}
+          ticketNumber={ticketNo}
           customerName={job?.customerName || "Customer"}
-          baseAmount={displayBaseAmount}
-          extraCharges={sparesAmount}
-          gstEnabled={gstPercent > 0}
+          paymentMode={paymentMethod}
+          paymentStatus={job?.paymentStatus ?? "Collected"}
+          invoiceDate={invoiceDate}
+          serviceCharge={serviceCharge}
+          serviceChargeWaived={job?.paymentServiceChargeWaived}
+          labourCharge={labourCharge}
+          labourChargeWaived={job?.paymentLabourChargeWaived}
+          sparePartsAmount={sparePartsAmount}
+          additionalCharge={additionalCharge}
+          discount={discount}
+          subtotal={baseAmount}
           gstPercent={gstPercent}
           gstAmount={gstAmount}
-          totalAmount={totalAmount}
-          collectedAmount={totalAmount}
-          paymentMode={paymentMethod}
-          paymentStatus="Collected"
-          invoiceDate={invoiceDate}
+          grandTotal={totalAmount}
           currency="₹"
         />
 

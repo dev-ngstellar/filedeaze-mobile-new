@@ -17,10 +17,29 @@ export function cleanPhoneNumber(phone: string): string {
   return phone.replace(/[^\d+]/g, "");
 }
 
-/**
- * Returns a human-friendly delay string for mock loaders.
- */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-export default { toTitleCase, cleanPhoneNumber, sleep };
+
+/**
+ * Calculates warranty status based on warranty expiration date.
+ */
+export function getWarrantyStatus(warrantyExpiresAt: string | null | undefined): { label: string; badgeBg: string } {
+  if (!warrantyExpiresAt) {
+    return { label: "Out of Warranty", badgeBg: "#ef4444" };
+  }
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const expiry = new Date(warrantyExpiresAt);
+    expiry.setHours(0, 0, 0, 0);
+    if (today <= expiry) {
+      return { label: "Warranty", badgeBg: "#22c55e" };
+    }
+  } catch {
+    // Return Out of Warranty in case of parse errors
+  }
+  return { label: "Out of Warranty", badgeBg: "#ef4444" };
+}
+
+export default { toTitleCase, cleanPhoneNumber, sleep, getWarrantyStatus };

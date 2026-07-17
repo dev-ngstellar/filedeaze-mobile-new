@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  useWindowDimensions,
 } from "react-native";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -42,7 +43,7 @@ import {
   Home,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
-import * as ImageManipulator from "expo-image-manipulator";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useTheme } from "../../theme";
 import {
   useRaiseCustomerTicket,
@@ -53,8 +54,9 @@ import {
   useUpdateCustomerAddress,
   useDeleteCustomerAddress,
   useCustomerProfile,
+  useCustomerAssets,
 } from "../../hooks/useCustomer";
-import { Address } from "../../services/customer.service";
+import { Address, CustomerAsset } from "../../services/customer.service";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
 import { AppButton } from "../../components/AppButton";
@@ -62,17 +64,20 @@ import { AppInput } from "../../components/AppInput";
 import { AppCard } from "../../components/AppCard";
 import { AppLoader } from "../../components/AppLoader";
 import { CustomerPopup } from "../../components/CustomerPopup";
+import { AMCServiceModal } from "../../components/amc/AMCServiceModal";
+import { AMCBadge } from "../../components/amc/AMCBadge";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "RaiseTicket">;
 
 const compressImage = async (uri: string): Promise<string> => {
   try {
-    const manipResult = await ImageManipulator.manipulateAsync(
-      uri,
-      [{ resize: { width: 1280 } }],
-      { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    return manipResult.uri;
+    // New context-based API (the old manipulateAsync shim is deprecated and has been observed to
+    // leak native image memory under SDK 54, causing the app to crash and reload after a few uploads).
+    const context = ImageManipulator.manipulate(uri);
+    context.resize({ width: 1280 });
+    const rendered = await context.renderAsync();
+    const result = await rendered.saveAsync({ compress: 0.6, format: SaveFormat.JPEG });
+    return result.uri;
   } catch (error) {
     console.error("Failed to compress image:", error);
     return uri;
@@ -84,10 +89,11 @@ interface WheelPickerProps {
   selectedValue: string;
   onValueChange: (value: string) => void;
   theme: any;
+  width?: number;
 }
 
-const WheelPicker: React.FC<WheelPickerProps> = ({ items, selectedValue, onValueChange, theme }) => {
-  const ITEM_HEIGHT = 44;
+const WheelPicker: React.FC<WheelPickerProps> = ({ items, selectedValue, onValueChange, theme, width = 70 }) => {
+  const ITEM_HEIGHT = 34;
   const scrollViewRef = React.useRef<ScrollView>(null);
 
   // Prepend and append empty items for centering
@@ -114,7 +120,7 @@ const WheelPicker: React.FC<WheelPickerProps> = ({ items, selectedValue, onValue
   };
 
   return (
-    <View style={{ height: ITEM_HEIGHT * 3, width: 70, overflow: "hidden" }}>
+    <View style={{ height: ITEM_HEIGHT * 3, width, overflow: "hidden" }}>
       {/* Target indicator lines */}
       <View
         style={{
@@ -150,7 +156,7 @@ const WheelPicker: React.FC<WheelPickerProps> = ({ items, selectedValue, onValue
           >
             <Text
               style={{
-                fontSize: item === selectedValue ? 18 : 14,
+                fontSize: item === selectedValue ? 14 : 11,
                 fontWeight: item === selectedValue ? "700" : "500",
                 color: item === selectedValue ? theme.colors.primary : theme.colors.textMuted,
               }}
@@ -168,12 +174,48 @@ export const RaiseTicketScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProp<CustomerStackParamList, "RaiseTicket">>();
-  const { categoryId, categoryName } = route.params || {};
+  const { categoryId, categoryName, assetId, assetName } = route.params || {};
   const isCategoryLocked = !!categoryId;
+  const isAssetLocked = !!assetId;
+
+  const { width: windowWidth } = useWindowDimensions();
+  const isLargeScreen = windowWidth >= 550;
 
   // API hooks
   const { data: categories = [], isLoading: isLoadingCats } = useCategories();
+  const { data: assets = [], isLoading: isLoadingAssets } = useCustomerAssets();
   const raiseTicketMutation = useRaiseCustomerTicket();
+
+  // Asset selection & AMC service-type states
+  const [selectedAsset, setSelectedAsset] = useState<CustomerAsset | null>(null);
+  const [assetDropdownVisible, setAssetDropdownVisible] = useState(false);
+  const [isAmcRequest, setIsAmcRequest] = useState(false);
+  const [amcModalVisible, setAmcModalVisible] = useState(false);
+  const amcPromptedForAssetId = useRef<string | null>(null);
+
+  // Pre-select the asset passed in via navigation params once the assets list loads
+  useEffect(() => {
+    if (assetId && assets.length > 0 && selectedAsset?.id !== assetId) {
+      const found = assets.find((a) => a.id === assetId);
+      if (found) setSelectedAsset(found);
+    }
+  }, [assetId, assets]);
+
+  // Whenever an AMC-eligible asset becomes selected, ask the customer how this request should be billed
+  useEffect(() => {
+    if (!selectedAsset) {
+      setIsAmcRequest(false);
+      return;
+    }
+    if (!selectedAsset.hasActiveAmc) {
+      setIsAmcRequest(false);
+      return;
+    }
+    if (amcPromptedForAssetId.current !== selectedAsset.id) {
+      amcPromptedForAssetId.current = selectedAsset.id;
+      setAmcModalVisible(true);
+    }
+  }, [selectedAsset]);
 
   // Address Book API hooks
   const { data: addresses = [], isLoading: isLoadingAddresses, refetch: refetchAddresses } = useCustomerAddresses();
@@ -261,10 +303,9 @@ export const RaiseTicketScreen = () => {
   const [subSearch, setSubSearch] = useState("");
 
   // Custom Modal states for Date and Time Pickers
-  const [dateModalVisible, setDateModalVisible] = useState(false);
+  const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
   const [tempDate, setTempDate] = useState<Date | null>(null);
 
-  const [timeModalVisible, setTimeModalVisible] = useState(false);
   const [tempHour, setTempHour] = useState(8);
   const [tempMin, setTempMin] = useState(0);
   const [tempPeriod, setTempPeriod] = useState<"AM" | "PM">("AM");
@@ -355,6 +396,37 @@ export const RaiseTicketScreen = () => {
     return formatDateKey(date) > todayKey;
   };
 
+  const handleOpenScheduleFlow = () => {
+    setSubModalVisible(false);
+    setTempDate(preferredDate);
+    if (preferredDate) {
+      setCurrentMonth(preferredDate);
+    } else {
+      setCurrentMonth(new Date());
+    }
+
+    if (preferredTimeSlot) {
+      const parts = preferredTimeSlot.split(" ");
+      const timePart = parts[0];
+      const periodPart = parts[1] as "AM" | "PM";
+      const [hh, mm] = timePart.split(":").map(Number);
+      setTempHour(hh || 8);
+      setTempMin(mm || 0);
+      setTempPeriod(periodPart || "AM");
+    } else {
+      const now = new Date();
+      let currentH = now.getHours();
+      const currentM = Math.ceil(now.getMinutes() / 5) * 5;
+      const period: "AM" | "PM" = currentH >= 12 ? "PM" : "AM";
+      if (currentH > 12) currentH -= 12;
+      if (currentH === 0) currentH = 12;
+      setTempHour(currentH);
+      setTempMin(currentM >= 60 ? 55 : currentM);
+      setTempPeriod(period);
+    }
+    setScheduleModalVisible(true);
+  };
+
   const handlePrevMonth = () => {
     setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
   };
@@ -428,7 +500,7 @@ export const RaiseTicketScreen = () => {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ["images", "videos"],
       quality: 0.7,
     });
     if (!result.canceled && result.assets[0]) {
@@ -451,7 +523,7 @@ export const RaiseTicketScreen = () => {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      mediaTypes: "videos",
       quality: 0.7,
       videoMaxDuration: 60,
     });
@@ -473,7 +545,7 @@ export const RaiseTicketScreen = () => {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ["images", "videos"],
       quality: 0.7,
       allowsMultipleSelection: true,
       selectionLimit: 5 - images.length,
@@ -622,6 +694,12 @@ export const RaiseTicketScreen = () => {
       formData.append("serviceAddress", serviceAddress);
       formData.append("priority", "MEDIUM");
 
+      // ── Optional: asset + AMC service type ────────────────────────
+      if (selectedAsset) {
+        formData.append("customerAssetId", selectedAsset.id);
+        formData.append("isAmcRequest", selectedAsset.hasActiveAmc && isAmcRequest ? "true" : "false");
+      }
+
       // ── Optional: scheduled date/time ────────────────────────────
       if (preferredDate && preferredTimeSlot) {
         const scheduledTime = new Date(preferredDate);
@@ -635,31 +713,30 @@ export const RaiseTicketScreen = () => {
       }
 
       // ── Media files — field name must be 'media' (FilesInterceptor) ──
-      const mediaList = await Promise.all(
-        images.map(async (item, idx) => {
-          let uploadUri = item.uri;
-          let filename = item.uri.split("/").pop() ?? `media_${idx}.jpg`;
+      // Compress sequentially, not in parallel — running native image manipulation for several
+      // full-resolution camera photos at once can spike native memory enough to crash the app
+      // (seen as the whole app closing and reloading mid-submit).
+      const mediaList: { uri: string; name: string; type: string }[] = [];
+      for (let idx = 0; idx < images.length; idx++) {
+        const item = images[idx];
+        let uploadUri = item.uri;
+        let filename = item.uri.split("/").pop() ?? `media_${idx}.jpg`;
 
-          if (item.type === "image") {
-            uploadUri = await compressImage(item.uri);
-            filename = `ticket_${Date.now()}_${idx}.jpg`;
-          }
+        if (item.type === "image") {
+          uploadUri = await compressImage(item.uri);
+          filename = `ticket_${Date.now()}_${idx}.jpg`;
+        }
 
-          const ext = filename.split(".").pop()?.toLowerCase() ?? "jpg";
-          let mimeType = "image/jpeg";
-          if (item.type === "video") {
-            mimeType = ext === "mp4" ? "video/mp4" : ext === "mov" ? "video/quicktime" : `video/${ext}`;
-          } else {
-            mimeType = "image/jpeg";
-          }
+        const ext = filename.split(".").pop()?.toLowerCase() ?? "jpg";
+        let mimeType = "image/jpeg";
+        if (item.type === "video") {
+          mimeType = ext === "mp4" ? "video/mp4" : ext === "mov" ? "video/quicktime" : `video/${ext}`;
+        } else {
+          mimeType = "image/jpeg";
+        }
 
-          return {
-            uri: uploadUri,
-            name: filename,
-            type: mimeType,
-          };
-        })
-      );
+        mediaList.push({ uri: uploadUri, name: filename, type: mimeType });
+      }
 
       mediaList.forEach((media) => {
         formData.append("media", {
@@ -722,12 +799,152 @@ export const RaiseTicketScreen = () => {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Card 1: Service Category Details */}
         <AppCard style={styles.card}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 18 }}>
-            <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-              <Text style={styles.stepBadgeText}>1</Text>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 10, marginBottom: 18 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 1 }}>
+              <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
+                <Text style={styles.stepBadgeText}>1</Text>
+              </View>
+              <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]} numberOfLines={1}>Service Information</Text>
             </View>
-            <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Service Information</Text>
+            <Pressable
+              onPress={handleOpenScheduleFlow}
+              style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }}
+            >
+              <CalendarIcon size={18} color={theme.colors.primary} />
+              <Text style={{ fontSize: 13, fontWeight: "600", color: preferredDate && preferredTimeSlot ? theme.colors.text : theme.colors.textMuted }}>
+                {preferredDate && preferredTimeSlot
+                  ? `${preferredDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" })} • ${preferredTimeSlot}`
+                  : "Set Visit"}
+              </Text>
+            </Pressable>
           </View>
+
+          {submitAttempted && errors.preferredDate ? (
+            <Text style={[styles.errorText, { color: theme.colors.danger, marginTop: -8, marginBottom: 12, marginLeft: 32 }]}>
+              {errors.preferredDate}
+            </Text>
+          ) : null}
+
+          {/* Asset (optional) */}
+          <View style={styles.fieldWrapper}>
+            <View style={styles.labelRow}>
+              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Asset</Text>
+              <Text style={{ color: theme.colors.textMuted, fontSize: 10, fontWeight: "500", marginLeft: 4 }}>(Optional)</Text>
+            </View>
+            <Pressable
+              style={[
+                styles.dropdownBtn,
+                {
+                  backgroundColor: isAssetLocked ? `${theme.colors.primary}08` : theme.colors.background,
+                  borderColor: isAssetLocked ? `${theme.colors.primary}30` : theme.colors.borderLight,
+                },
+              ]}
+              disabled={isAssetLocked || isLoadingAssets}
+              onPress={() => setAssetDropdownVisible(true)}
+            >
+              <View style={styles.dropdownValueWrapper}>
+                <Text style={[styles.dropdownText, { color: selectedAsset ? theme.colors.text : theme.colors.textLight }]}>
+                  {selectedAsset ? selectedAsset.name : assetName ?? "Select a registered asset..."}
+                </Text>
+              </View>
+              {!isAssetLocked && <ChevronDown size={18} color={theme.colors.textMuted} />}
+            </Pressable>
+
+            {selectedAsset?.hasActiveAmc ? (
+              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8, gap: 8 }}>
+                <AMCBadge label={isAmcRequest ? "AMC Service" : "Normal Service"} active={isAmcRequest} />
+                <Pressable onPress={() => setAmcModalVisible(true)}>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>Change</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Asset Picker Modal */}
+          <Modal
+            visible={assetDropdownVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setAssetDropdownVisible(false)}
+          >
+            <Pressable style={styles.modalOverlay} onPress={() => setAssetDropdownVisible(false)}>
+              <Pressable
+                style={[styles.centeredModalContent, { backgroundColor: theme.colors.card, maxHeight: "70%" }]}
+                onPress={(e) => e.stopPropagation()}
+              >
+                <View style={styles.modalHeader}>
+                  <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Select Asset</Text>
+                  <Pressable onPress={() => setAssetDropdownVisible(false)}>
+                    <X size={20} color={theme.colors.textMuted} />
+                  </Pressable>
+                </View>
+                <ScrollView style={{ maxHeight: 360 }}>
+                  <Pressable
+                    style={[styles.subListItem, { padding: 14, marginHorizontal: 16, marginVertical: 6 }]}
+                    onPress={() => {
+                      setSelectedAsset(null);
+                      setAssetDropdownVisible(false);
+                    }}
+                  >
+                    <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: "italic" }}>No asset — general request</Text>
+                  </Pressable>
+                  {assets.length === 0 ? (
+                    <View style={{ alignItems: "center", paddingVertical: 24 }}>
+                      <Text style={{ color: theme.colors.textMuted, fontSize: 12 }}>No registered assets found</Text>
+                    </View>
+                  ) : (
+                    assets.map((item) => {
+                      const isActive = selectedAsset?.id === item.id;
+                      return (
+                        <Pressable
+                          key={item.id}
+                          style={[
+                            styles.subListItem,
+                            {
+                              marginHorizontal: 16,
+                              marginVertical: 4,
+                              padding: 12,
+                              backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background,
+                            },
+                            isActive
+                              ? { borderColor: theme.colors.primary, borderWidth: 1.5 }
+                              : { borderColor: theme.colors.borderLight, borderWidth: 1 },
+                          ]}
+                          onPress={() => {
+                            setSelectedAsset(item);
+                            setAssetDropdownVisible(false);
+                          }}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text, fontSize: 13 }]}>
+                              {item.name}
+                            </Text>
+                            {(item.brand || item.model) ? (
+                              <Text style={{ color: theme.colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                                {[item.brand, item.model].filter(Boolean).join(" · ")}
+                              </Text>
+                            ) : null}
+                          </View>
+                          {item.hasActiveAmc ? <AMCBadge label="AMC" active /> : null}
+                        </Pressable>
+                      );
+                    })
+                  )}
+                </ScrollView>
+              </Pressable>
+            </Pressable>
+          </Modal>
+
+          {/* AMC vs Normal Service choice modal */}
+          <AMCServiceModal
+            visible={amcModalVisible}
+            planName={undefined}
+            onClose={() => setAmcModalVisible(false)}
+            onConfirm={(isAmc) => {
+              setIsAmcRequest(isAmc);
+              setAmcModalVisible(false);
+            }}
+          />
 
           {/* Category */}
           <View style={styles.fieldWrapper}>
@@ -995,94 +1212,14 @@ export const RaiseTicketScreen = () => {
           </View>
         </AppCard>
 
-        {/* Card 2: Date & Time Trigger Buttons */}
-        <AppCard style={styles.card}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 18 }}>
-            <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-              <Text style={styles.stepBadgeText}>2</Text>
-            </View>
-            <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Preferred Visit Schedule</Text>
-          </View>
-
-          <View style={{ flexDirection: "row", gap: 12 }}>
-            {/* Preferred Date Selector */}
-            <View style={{ flex: 1 }}>
-              <View style={styles.labelRow}>
-                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Visit Date</Text>
-                <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-              </View>
-              <Pressable
-                style={[styles.dropdownBtn, { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight }]}
-                onPress={() => {
-                  setSubModalVisible(false);
-                  setTempDate(preferredDate);
-                  setDateModalVisible(true);
-                }}
-              >
-                <View style={styles.dropdownValueWrapper}>
-                  <CalendarIcon size={18} color={theme.colors.primary} />
-                  <Text style={[styles.dropdownText, { color: preferredDate ? theme.colors.text : theme.colors.textLight, fontSize: 13 }]}>
-                    {preferredDate
-                      ? preferredDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
-                      : "Select date"}
-                  </Text>
-                </View>
-              </Pressable>
-            </View>
-
-            {/* Preferred Time Selector */}
-            <View style={{ flex: 1 }}>
-              <View style={styles.labelRow}>
-                <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Visit Time</Text>
-                <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-              </View>
-              <Pressable
-                style={[styles.dropdownBtn, { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight }]}
-                onPress={() => {
-                  setSubModalVisible(false);
-                  if (preferredTimeSlot) {
-                    // Parse existing HH:MM AM/PM format
-                    const parts = preferredTimeSlot.split(" ");
-                    const timePart = parts[0];
-                    const periodPart = parts[1] as "AM" | "PM";
-                    const [hh, mm] = timePart.split(":").map(Number);
-                    setTempHour(hh || 8);
-                    setTempMin(mm || 0);
-                    setTempPeriod(periodPart || "AM");
-                  } else {
-                    const now = new Date();
-                    let currentH = now.getHours();
-                    const currentM = Math.ceil(now.getMinutes() / 5) * 5;
-                    const period: "AM" | "PM" = currentH >= 12 ? "PM" : "AM";
-                    if (currentH > 12) currentH -= 12;
-                    if (currentH === 0) currentH = 12;
-                    setTempHour(currentH);
-                    setTempMin(currentM >= 60 ? 55 : currentM);
-                    setTempPeriod(period);
-                  }
-                  setTimeModalVisible(true);
-                }}
-              >
-                <View style={styles.dropdownValueWrapper}>
-                  <Clock size={18} color={theme.colors.primary} />
-                  <Text style={[styles.dropdownText, { color: preferredTimeSlot ? theme.colors.text : theme.colors.textLight, fontSize: 13 }]}>
-                    {preferredTimeSlot || "Select time"}
-                  </Text>
-                </View>
-              </Pressable>
-            </View>
-          </View>
-          {submitAttempted && errors.preferredDate ? (
-            <Text style={[styles.errorText, { color: theme.colors.danger, marginTop: 8 }]}>{errors.preferredDate}</Text>
-          ) : null}
-        </AppCard>
+        {/* Card 2 was Preferred Visit Schedule, now merged into Card 1 header */}
 
         {/* Card 3: Address Details */}
         <AppCard style={styles.card}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-                <Text style={styles.stepBadgeText}>3</Text>
+                <Text style={styles.stepBadgeText}>2</Text>
               </View>
               <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Visit Address</Text>
             </View>
@@ -1171,7 +1308,7 @@ export const RaiseTicketScreen = () => {
         <AppCard style={styles.card}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 18 }}>
             <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-              <Text style={styles.stepBadgeText}>4</Text>
+              <Text style={styles.stepBadgeText}>3</Text>
             </View>
             <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Media Documentation</Text>
           </View>
@@ -1415,195 +1552,171 @@ export const RaiseTicketScreen = () => {
         </View>
       </Modal>
 
-      {/* Custom Date Picker Modal */}
-      <Modal visible={dateModalVisible} transparent animationType="slide" onRequestClose={() => setDateModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.card, paddingBottom: 24 }]}>
+      {/* Custom Combined Date-Time Picker Modal */}
+      <Modal
+        visible={scheduleModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setScheduleModalVisible(false)}
+      >
+        <Pressable style={styles.scheduleModalOverlay} onPress={() => setScheduleModalVisible(false)}>
+          <Pressable
+            style={[styles.scheduleModalContent, { backgroundColor: theme.colors.card, paddingBottom: 24, maxHeight: "90%" }]}
+            onPress={(e) => e.stopPropagation()}
+          >
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Select Date</Text>
-              <Pressable onPress={() => setDateModalVisible(false)}>
+              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Set Visit Schedule</Text>
+              <Pressable onPress={() => setScheduleModalVisible(false)}>
                 <X size={20} color={theme.colors.textMuted} />
               </Pressable>
             </View>
 
-            <View style={{ padding: 16 }}>
-              {/* Calendar Controls */}
-              <View style={styles.calendarHeader}>
-                <Pressable onPress={handlePrevMonth} style={styles.calendarArrow}>
-                  <ChevronLeft size={20} color={theme.colors.text} />
-                </Pressable>
-                <Text style={[styles.calendarMonthName, { color: theme.colors.text }]}>
-                  {currentMonth.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
-                </Text>
-                <Pressable onPress={handleNextMonth} style={styles.calendarArrow}>
-                  <ChevronRight size={20} color={theme.colors.text} />
-                </Pressable>
-              </View>
-
-              {/* Calendar Weekday Names */}
-              <View style={styles.weekdayRow}>
-                {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
-                  <Text key={day} style={[styles.weekdayCell, { color: theme.colors.textMuted }]}>
-                    {day}
-                  </Text>
-                ))}
-              </View>
-
-              {/* Calendar Month Days Grid */}
-              <View style={styles.daysGrid}>
-                {calendarDays.map((dateVal, idx) => {
-                  if (!dateVal) {
-                    return <View key={`empty-${idx}`} style={styles.dayCellEmpty} />;
-                  }
-
-                  const isPastOrToday = !isDateAllowed(dateVal);
-                  const isToday = formatDateKey(dateVal) === todayKey;
-                  const isSelected = tempDate && isDateAllowed(dateVal) && formatDateKey(dateVal) === formatDateKey(tempDate);
-                  const hasValidSelection = tempDate && isDateAllowed(tempDate);
-
-                  return (
-                    <Pressable
-                      key={`day-${idx}`}
-                      onPress={() => {
-                        if (!isDateAllowed(dateVal)) {
-                          Alert.alert(
-                            "Invalid Date",
-                            "Bookings can only be scheduled from tomorrow onwards."
-                          );
-                          return;
-                        }
-                        setTempDate(dateVal);
-                      }}
-                      style={[
-                        styles.dayCell,
-                        isSelected && { backgroundColor: theme.colors.primary, borderRadius: 100 },
-                        !isSelected && isToday && !hasValidSelection && { borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 100 },
-                        isPastOrToday && { opacity: 0.3 },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.dayText,
-                          { color: theme.colors.text },
-                          isSelected && { color: "#ffffff", fontWeight: "700" },
-                          !isSelected && isToday && !hasValidSelection && { color: theme.colors.primary, fontWeight: "700" },
-                        ]}
-                      >
-                        {dateVal.getDate()}
-                      </Text>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "stretch", width: "100%", gap: 10 }}>
+                {/* ── Left Column (Date Picker) ── */}
+                <View style={{ flex: 1 }}>
+                  {/* Calendar Controls */}
+                  <View style={[styles.calendarHeader, { marginVertical: 4 }]}>
+                    <Pressable onPress={handlePrevMonth} style={styles.calendarArrow} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <ChevronLeft size={16} color={theme.colors.text} />
                     </Pressable>
-                  );
-                })}
-              </View>
+                    <Text style={[styles.calendarMonthName, { color: theme.colors.text, fontSize: 13 }]}>
+                      {currentMonth.toLocaleDateString("en-IN", { month: "short", year: "numeric" })}
+                    </Text>
+                    <Pressable onPress={handleNextMonth} style={styles.calendarArrow} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <ChevronRight size={16} color={theme.colors.text} />
+                    </Pressable>
+                  </View>
 
-              {tempDate && !isDateAllowed(tempDate) ? (
-                <Text style={{ color: theme.colors.danger, fontSize: 13, textAlign: "center", marginVertical: 10, fontWeight: "600" }}>
-                  Bookings can only be scheduled from tomorrow onwards.
-                </Text>
-              ) : null}
+                  {/* Calendar Weekday Names */}
+                  <View style={[styles.weekdayRow, { marginBottom: 4 }]}>
+                    {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
+                      <Text key={day} style={[styles.weekdayCell, { color: theme.colors.textMuted, fontSize: 10 }]}>
+                        {day}
+                      </Text>
+                    ))}
+                  </View>
 
-              {/* Action Buttons */}
-              <View style={styles.modalActionRow}>
-                <Pressable
-                  style={[styles.modalActionBtn, styles.modalActionBtnCancel, { borderColor: theme.colors.border }]}
-                  onPress={() => setDateModalVisible(false)}
-                >
-                  <Text style={[styles.modalActionBtnTextCancel, { color: theme.colors.textMuted }]}>Cancel</Text>
-                </Pressable>
-                {tempDate && isDateAllowed(tempDate) ? (
-                  <Pressable
-                    style={[styles.modalActionBtn, styles.modalActionBtnOk, { backgroundColor: theme.colors.primary }]}
-                    onPress={() => {
-                      if (tempDate) {
-                        const isToday = formatDateKey(tempDate) === todayKey;
-                        if (isToday && preferredTimeSlot) {
-                          const [timePart] = preferredTimeSlot.split(" - ");
-                          const [hhmm, ampm] = timePart.split(" ");
-                          let [hours, minutes] = hhmm.split(":").map(Number);
-                          if (ampm === "PM" && hours !== 12) hours += 12;
-                          if (ampm === "AM" && hours === 12) hours = 0;
-                          const now = new Date();
-                          const selectedTimeVal = hours * 60 + minutes;
-                          const currentTimeVal = now.getHours() * 60 + now.getMinutes();
-                          if (selectedTimeVal < currentTimeVal) {
-                            setPreferredTimeSlot("");
-                            triggerPopup("warning", "Time Cleared", "The previously selected time is in the past for today. Please select a future time.");
-                          }
-                        }
-                        setPreferredDate(tempDate);
-                        if (errors.preferredDate) setErrors((prev) => ({ ...prev, preferredDate: "" }));
+                  {/* Calendar Month Days Grid */}
+                  <View style={styles.daysGrid}>
+                    {calendarDays.map((dateVal, idx) => {
+                      if (!dateVal) {
+                        return <View key={`empty-${idx}`} style={styles.dayCellEmpty} />;
                       }
-                      setDateModalVisible(false);
-                    }}
-                  >
-                    <Text style={[styles.modalActionBtnTextOk, { color: "#ffffff" }]}>OK</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
-      {/* Custom Time Picker Modal */}
-      <Modal visible={timeModalVisible} transparent animationType="slide" onRequestClose={() => setTimeModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.card }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Select Time</Text>
-              <Pressable onPress={() => setTimeModalVisible(false)}>
-                <X size={20} color={theme.colors.textMuted} />
+                      const isPastOrToday = !isDateAllowed(dateVal);
+                      const isToday = formatDateKey(dateVal) === todayKey;
+                      const isSelected = tempDate && isDateAllowed(dateVal) && formatDateKey(dateVal) === formatDateKey(tempDate);
+                      const hasValidSelection = tempDate && isDateAllowed(tempDate);
+
+                      return (
+                        <Pressable
+                          key={`day-${idx}`}
+                          onPress={() => {
+                            if (!isDateAllowed(dateVal)) {
+                              Alert.alert(
+                                "Invalid Date",
+                                "Bookings can only be scheduled from tomorrow onwards."
+                              );
+                              return;
+                            }
+                            setTempDate(dateVal);
+                          }}
+                          style={[
+                            styles.dayCell,
+                            isSelected && { backgroundColor: theme.colors.primary, borderRadius: 100 },
+                            !isSelected && isToday && !hasValidSelection && { borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 100 },
+                            isPastOrToday && { opacity: 0.3 },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.dayText,
+                              { color: theme.colors.text, fontSize: 11 },
+                              isSelected && { color: "#ffffff", fontWeight: "700" },
+                              !isSelected && isToday && !hasValidSelection && { color: theme.colors.primary, fontWeight: "700" },
+                            ]}
+                          >
+                            {dateVal.getDate()}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  {tempDate && !isDateAllowed(tempDate) ? (
+                    <Text style={{ color: theme.colors.danger, fontSize: 10, textAlign: "center", marginVertical: 4, fontWeight: "600" }}>
+                      Bookings tomorrow onwards.
+                    </Text>
+                  ) : null}
+                </View>
+
+                {/* ── Separator Divider ── */}
+                <View style={{ width: 1, backgroundColor: theme.colors.borderLight, marginHorizontal: 4, alignSelf: "stretch" }} />
+
+                {/* ── Right Column (Time Picker) ── */}
+                <View style={{ width: 130, flexShrink: 0, justifyContent: "center", alignItems: "center" }}>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.text, marginBottom: 6, textAlign: "center" }}>Select Time</Text>
+                  <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 4, marginVertical: 2 }}>
+                    <WheelPicker
+                      items={["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]}
+                      selectedValue={tempHour.toString()}
+                      onValueChange={(val) => setTempHour(parseInt(val, 10))}
+                      theme={theme}
+                      width={34}
+                    />
+                    <Text style={{ fontSize: 18, fontWeight: "700", color: theme.colors.textMuted }}>:</Text>
+                    <WheelPicker
+                      items={["00", "05", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"]}
+                      selectedValue={tempMin.toString().padStart(2, "0")}
+                      onValueChange={(val) => setTempMin(parseInt(val, 10))}
+                      theme={theme}
+                      width={34}
+                    />
+                    <View style={{ width: 2 }} />
+                    <WheelPicker
+                      items={["AM", "PM"]}
+                      selectedValue={tempPeriod}
+                      onValueChange={(val: any) => setTempPeriod(val)}
+                      theme={theme}
+                      width={34}
+                    />
+                  </View>
+
+                  {/* Formatted Schedule Preview in Modal */}
+                  <View style={[styles.timePreviewRow, { backgroundColor: `${theme.colors.primary}08`, borderRadius: 8, marginVertical: 6, padding: 6, width: "100%" }]}>
+                    <Clock size={14} color={theme.colors.primary} />
+                    <Text style={[styles.timePreviewText, { color: theme.colors.primary, fontSize: 10, fontWeight: "600", flex: 1, flexWrap: "wrap", textAlign: "center" }]}>
+                      {tempDate
+                        ? `${tempDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })}\n${tempHour.toString().padStart(2, "0")}:${tempMin.toString().padStart(2, "0")} ${tempPeriod}`
+                        : `Select Date\n${tempHour.toString().padStart(2, "0")}:${tempMin.toString().padStart(2, "0")} ${tempPeriod}`}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </ScrollView>
+
+            {/* Action Footer Buttons */}
+            <View style={[styles.modalActionRow, { paddingHorizontal: 16 }]}>
+              <Pressable
+                style={[styles.modalActionBtn, styles.modalActionBtnCancel, { borderColor: theme.colors.border }]}
+                onPress={() => setScheduleModalVisible(false)}
+              >
+                <Text style={[styles.modalActionBtnTextCancel, { color: theme.colors.textMuted }]}>Cancel</Text>
               </Pressable>
-            </View>
+              <Pressable
+                style={[
+                  styles.modalActionBtn,
+                  styles.modalActionBtnOk,
+                  { backgroundColor: tempDate && isDateAllowed(tempDate) ? theme.colors.primary : `${theme.colors.primary}50` }
+                ]}
+                disabled={!tempDate || !isDateAllowed(tempDate)}
+                onPress={() => {
+                  if (tempDate) {
+                    const formattedTime = `${tempHour.toString().padStart(2, "0")}:${tempMin.toString().padStart(2, "0")} ${tempPeriod}`;
 
-            <View style={{ padding: 16, paddingBottom: 28 }}>
-              {/* Scrollable wheel selectors */}
-              <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 15, marginVertical: 20 }}>
-                <WheelPicker
-                  items={["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]}
-                  selectedValue={tempHour.toString()}
-                  onValueChange={(val) => setTempHour(parseInt(val, 10))}
-                  theme={theme}
-                />
-                <Text style={{ fontSize: 24, fontWeight: "700", color: theme.colors.textMuted }}>:</Text>
-                <WheelPicker
-                  items={["00", "05", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"]}
-                  selectedValue={tempMin.toString().padStart(2, "0")}
-                  onValueChange={(val) => setTempMin(parseInt(val, 10))}
-                  theme={theme}
-                />
-                <View style={{ width: 10 }} />
-                <WheelPicker
-                  items={["AM", "PM"]}
-                  selectedValue={tempPeriod}
-                  onValueChange={(val: any) => setTempPeriod(val)}
-                  theme={theme}
-                />
-              </View>
-
-              {/* Formatted Time Preview */}
-              <View style={[styles.timePreviewRow, { backgroundColor: `${theme.colors.primary}08`, borderRadius: 12 }]}>
-                <Clock size={18} color={theme.colors.primary} />
-                <Text style={[styles.timePreviewText, { color: theme.colors.primary }]}>
-                  {`${tempHour.toString().padStart(2, "0")}:${tempMin.toString().padStart(2, "0")} ${tempPeriod}`}
-                </Text>
-              </View>
-
-              {/* Action Buttons */}
-              <View style={styles.modalActionRow}>
-                <Pressable
-                  style={[styles.modalActionBtn, styles.modalActionBtnCancel, { borderColor: theme.colors.border }]}
-                  onPress={() => setTimeModalVisible(false)}
-                >
-                  <Text style={[styles.modalActionBtnTextCancel, { color: theme.colors.textMuted }]}>Cancel</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.modalActionBtn, styles.modalActionBtnOk, { backgroundColor: theme.colors.primary }]}
-                  onPress={() => {
-                    const formatted = `${tempHour.toString().padStart(2, "0")}:${tempMin.toString().padStart(2, "0")} ${tempPeriod}`;
-
-                    const checkDate = preferredDate || new Date();
-                    const isToday = checkDate.toDateString() === new Date().toDateString();
+                    // Double check past date/time validation
+                    const isToday = tempDate.toDateString() === new Date().toDateString();
                     if (isToday) {
                       const now = new Date();
                       let selectedHours = tempHour;
@@ -1619,17 +1732,18 @@ export const RaiseTicketScreen = () => {
                       }
                     }
 
-                    setPreferredTimeSlot(formatted);
+                    setPreferredDate(tempDate);
+                    setPreferredTimeSlot(formattedTime);
                     if (errors.preferredDate) setErrors((prev) => ({ ...prev, preferredDate: "" }));
-                    setTimeModalVisible(false);
-                  }}
-                >
-                  <Text style={[styles.modalActionBtnTextOk, { color: "#ffffff" }]}>Confirm</Text>
-                </Pressable>
-              </View>
+                    setScheduleModalVisible(false);
+                  }
+                }}
+              >
+                <Text style={[styles.modalActionBtnTextOk, { color: "#ffffff" }]}>Confirm</Text>
+              </Pressable>
             </View>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
       {/* ──── Select Address Bottom Sheet (List Only) ──── */}
@@ -2227,7 +2341,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   videoOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFillObject,  
     backgroundColor: "rgba(0, 0, 0, 0.4)",
     alignItems: "center",
     justifyContent: "center",
@@ -2248,6 +2362,22 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: "90%",
+  },
+  scheduleModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scheduleModalContent: {
+    width: "90%",
+    borderRadius: 18,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
   },
   modalHeader: {
     flexDirection: "row",

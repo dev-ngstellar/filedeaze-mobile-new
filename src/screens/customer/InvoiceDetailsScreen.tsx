@@ -36,7 +36,7 @@ import { AppLoader } from "../../components/AppLoader";
 import { AppButton } from "../../components/AppButton";
 import { AppCard } from "../../components/AppCard";
 import { AppAlertModal } from "../../components/AppAlertModal";
-import { PaymentBreakdownCard } from "../../components/PaymentBreakdownCard";
+import { PaymentSummaryCard } from "../../components/warranty/PaymentSummaryCard";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "InvoiceDetails">;
 type RouteProps = RouteProp<CustomerStackParamList, "InvoiceDetails">;
@@ -348,22 +348,30 @@ export const InvoiceDetailsScreen = () => {
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-        <PaymentBreakdownCard
-          invoiceNo={invoiceNumber}
-          ticketNo={ticketNumber}
-          customerName={invoice.ticket?.customer?.name || "Customer"}
-          baseAmount={baseAmount}
-          extraCharges={extraCharges}
-          gstEnabled={invoice.gstPercent > 0}
-          gstPercent={invoice.gstPercent}
-          gstAmount={gstAmount}
-          totalAmount={totalAmount}
-          collectedAmount={totalAmount}
-          paymentMode={paymentMethod}
-          paymentStatus={paymentStatus}
-          invoiceDate={formatDate(invoice.generatedAt)}
-          currency="₹"
-        />
+        {/* Single unified payment summary — warrantyPartsValue is never persisted on the
+            Invoice/Payment records (only the live technician preview / just-collected response
+            have it), so it's correctly omitted here rather than fabricated. */}
+        <View style={{ marginBottom: 16 }}>
+          <PaymentSummaryCard
+            invoiceNumber={invoiceNumber}
+            ticketNumber={ticketNumber}
+            customerName={invoice.ticket?.customer?.name || "Customer"}
+            paymentMode={paymentMethod}
+            paymentStatus={paymentStatus}
+            invoiceDate={formatDate(invoice.generatedAt)}
+            serviceCharge={Number(invoice.serviceCharge ?? 0)}
+            serviceChargeWaived={Boolean(invoice.payment?.serviceChargeWaived)}
+            labourCharge={Number(invoice.labourCharge ?? 0)}
+            labourChargeWaived={Boolean(invoice.payment?.labourChargeWaived)}
+            sparePartsAmount={Number(invoice.sparePartsAmount ?? 0)}
+            additionalCharge={Number(invoice.additionalCharge ?? 0)}
+            discount={Number(invoice.discount ?? 0)}
+            subtotal={Number(invoice.subtotal ?? baseAmount)}
+            gstPercent={Number(invoice.gstPercent ?? 0)}
+            gstAmount={gstAmount}
+            grandTotal={totalAmount}
+          />
+        </View>
 
         {/* Technician Info */}
         {invoice.ticket?.technician && (

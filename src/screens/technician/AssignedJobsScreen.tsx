@@ -41,6 +41,7 @@ import { AppHeader } from "../../components/AppHeader";
 import { TicketStatus } from "../../services/job.service";
 import { StatusBadge } from "../../components/StatusBadge";
 import { AppConfirmModal } from "../../components/AppConfirmModal";
+import { AMCBadge } from "../../components/amc/AMCBadge";
 
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "AssignedJobs">;
 type RouteProps = RouteProp<TechnicianStackParamList, "AssignedJobs">;
@@ -235,6 +236,9 @@ export const AssignedJobsScreen = () => {
       paymentMethod: inv.payment?.method,
       scheduledDateRaw: inv.generatedAt ? inv.generatedAt.substring(0, 10) : "",
       closedAt: inv.generatedAt ? String(inv.generatedAt) : undefined,
+      // billingType is set to WARRANTY exactly when the ticket was AMC-covered at billing time
+      // (see computeBillingBreakdown on the backend) — the only AMC signal invoices retain.
+      isAmcCovered: inv.billingType === "WARRANTY",
     }));
   }, [invoices]);
 
@@ -333,6 +337,11 @@ export const AssignedJobsScreen = () => {
             <StatusBadge status={item.status} paymentCollection={item.paymentCollection} />
           </View>
 
+          {item.isAmcCovered ? (
+            <View style={{ marginTop: 6, marginBottom: 2 }}>
+              <AMCBadge label="AMC JOB" active />
+            </View>
+          ) : null}
 
           {/* Category */}
           {item.category && (
