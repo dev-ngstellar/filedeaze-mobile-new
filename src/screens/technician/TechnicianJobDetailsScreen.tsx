@@ -206,6 +206,7 @@ export const TechnicianJobDetailsScreen = () => {
   // Complete Payment Collection state
   const [paymentMode, setPaymentMode] = useState<"CASH" | "UPI">("CASH");
   const [amountStr, setAmountStr] = useState("");
+  const [labourChargeStr, setLabourChargeStr] = useState("");
   const [extraCharges, setExtraCharges] = useState<{ id: string; name: string; amountStr: string }[]>([]);
   const [transactionId, setTransactionId] = useState("");
   const [transactionIdError, setTransactionIdError] = useState("");
@@ -232,6 +233,7 @@ export const TechnicianJobDetailsScreen = () => {
 
   // CALCULATION LOGIC
   const base = (!amountStr || isNaN(parseFloat(amountStr)) || parseFloat(amountStr) <= 0) ? 0 : parseFloat(amountStr);
+  const labour = (!labourChargeStr || isNaN(parseFloat(labourChargeStr)) || parseFloat(labourChargeStr) <= 0) ? 0 : parseFloat(labourChargeStr);
   const extraChargesSum = extraCharges.reduce((sum, item) => {
     const name = item.name.trim();
     const val = parseFloat(item.amountStr);
@@ -280,8 +282,8 @@ export const TechnicianJobDetailsScreen = () => {
   // never on device. Only fetched once the technician has entered a charge and the form is open.
   const { data: paymentPreview } = usePaymentPreview(
     jobId,
-    { serviceCharge: base, additionalCharge: backendAdditionalCharge, discount: discountAmount },
-    completeFormVisible && base > 0
+    { serviceCharge: base, labourCharge: labour, additionalCharge: backendAdditionalCharge, discount: discountAmount },
+    completeFormVisible && completeStep === 2
   );
 
   // Reached Location GPS State
@@ -359,6 +361,20 @@ export const TechnicianJobDetailsScreen = () => {
       }
     }
   }, [job, amountStr]);
+
+  useEffect(() => {
+    if (job && !labourChargeStr) {
+      const defaultLabour = (job as any).labourCharge ?? 0;
+      if (defaultLabour > 0) {
+        setLabourChargeStr(String(defaultLabour));
+      }
+    }
+  }, [job, labourChargeStr]);
+
+  // Sync paymentSpareParts with completionSpareParts
+  useEffect(() => {
+    setPaymentSpareParts(completionSpareParts);
+  }, [completionSpareParts]);
 
   // Auto-fetch GPS on REACHED status or similar
   useEffect(() => {
@@ -832,35 +848,34 @@ export const TechnicianJobDetailsScreen = () => {
         }
       }
 
-      // 2. Complete the job
-      await completeJobMutation.mutateAsync({
-        ticketNo: jobId,
-        payload: {
-          beforePhotos: job?.beforePhotos ?? [],
-          afterPhotos: uniqueAfterPhotos,
-          customerSignature: "captured",
-          workNotes: workNotes + (remarks.trim() ? ` | Remarks: ${remarks}` : ""),
-          duration: liveDuration || "—",
-          lat: gpsCoords?.lat ?? 28.6139,
-          lng: gpsCoords?.lng ?? 77.2090,
-          sparePartsUsed: completionSpareParts.map((p) => ({
-            sparePartId: p.sparePartId,
-            quantity: p.quantity,
-            warrantyStatus: p.warrantyStatus!,
-          })),
-        },
-      });
+      // 2. Complete the job (skip if already completed to prevent API rejection errors)
+      if (job?.status === "IN_PROGRESS") {
+        await completeJobMutation.mutateAsync({
+          ticketNo: jobId,
+          payload: {
+            beforePhotos: job?.beforePhotos ?? [],
+            afterPhotos: uniqueAfterPhotos,
+            customerSignature: "captured",
+            workNotes: workNotes + (remarks.trim() ? ` | Remarks: ${remarks}` : ""),
+            duration: liveDuration || "—",
+            lat: gpsCoords?.lat ?? 28.6139,
+            lng: gpsCoords?.lng ?? 77.2090,
+            sparePartsUsed: completionSpareParts.map((p) => ({
+              sparePartId: p.sparePartId,
+              quantity: p.quantity,
+              warrantyStatus: p.warrantyStatus!,
+            })),
+          },
+        });
+      }
 
       queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
       queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
       queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
       queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
 
-      setSuccessTitle("Job Completed ✓");
-      setSuccessMessage("Work summary and photos recorded successfully. Ticket status updated to COMPLETED.");
-      setCompleteFormVisible(false);
-      setSuccessVisible(true);
       await refetch();
+      setCompleteStep(2);
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to complete ticket.");
     } finally {
@@ -870,7 +885,8 @@ export const TechnicianJobDetailsScreen = () => {
 
   // NEW DECOUPLED PAYMENT SUBMIT
   const handlePaymentSubmit = async () => {
-    if (amount <= 0) {
+    const finalAmountToCollect = paymentPreview ? paymentPreview.grandTotal : amount;
+    if (finalAmountToCollect <= 0) {
       showAlert("Amount Required", "Please enter a valid payment amount.");
       return;
     }
@@ -900,7 +916,7 @@ export const TechnicianJobDetailsScreen = () => {
     };
 
     if (paymentMode === "UPI") {
-      if (!paymentConfig || (!paymentConfig.upiId && !paymentConfig.upiQrImageUrl)) {
+      if (!paymentConfig || !paymentConfig.upiId) {
         showAlert("UPI Not Configured", "UPI payment is not configured. Please select CASH payment mode.");
         return;
       }
@@ -943,6 +959,7 @@ export const TechnicianJobDetailsScreen = () => {
         ticketNo: jobId,
         payload: {
           serviceCharge: base,
+          labourCharge: labour,
           additionalCharge: backendAdditionalCharge,
           discount: discountAmount,
           warrantyParts,
@@ -951,12 +968,7 @@ export const TechnicianJobDetailsScreen = () => {
         },
       });
 
-      // 4. Close the ticket explicitly
-      try {
-        await JobService.updateJobStatus(jobId, "CLOSED" as any);
-      } catch (err) {
-        console.warn("Failed to close ticket after payment", err);
-      }
+
 
       queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
       queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
@@ -964,11 +976,22 @@ export const TechnicianJobDetailsScreen = () => {
       queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
 
-      // invoice generated — show the full backend-returned breakdown, not the generic success dialog
-      setPaymentResult(payResult);
       setCompleteFormVisible(false);
-      setPaymentSuccessVisible(true);
       await refetch();
+
+      // Go directly to Invoice Screen
+      navigation.replace("InvoiceGenerate", {
+        jobId: jobId,
+        ticketNo: job?.ticketNo ?? jobId,
+        amount: payResult.grandTotal ?? 0,
+        paymentMethod: paymentMode,
+        invoiceNo: payResult.invoiceNumber,
+        invoiceSubtotal: payResult.subtotal,
+        invoiceGstAmount: payResult.gstAmount,
+        invoiceGstPercent: payResult.gstPercent,
+        invoiceTotal: payResult.grandTotal,
+        invoiceGeneratedAt: new Date().toISOString(),
+      });
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to collect payment.");
     } finally {
@@ -976,13 +999,7 @@ export const TechnicianJobDetailsScreen = () => {
     }
   };
 
-  const handleStep3Submit = async () => {
-    if (job?.status === "COMPLETED") {
-      await handlePaymentSubmit();
-    } else {
-      await handleCompleteSubmit();
-    }
-  };
+
 
   const openPhone = (phoneNumber: string) => {
     Linking.openURL(`tel:${phoneNumber}`);
@@ -1568,7 +1585,7 @@ export const TechnicianJobDetailsScreen = () => {
               title="Collect Payment"
               variant="success"
               onPress={() => {
-                setCompleteStep(3);
+                setCompleteStep(2);
                 setCompleteFormVisible(true);
               }}
             />
@@ -2017,7 +2034,16 @@ export const TechnicianJobDetailsScreen = () => {
       </Modal>
 
       {/* Complete Job & Payment Collection Modal */}
-      <Modal visible={completeFormVisible} animationType="slide" transparent>
+      <Modal
+        visible={completeFormVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          if (completeStep !== 2) {
+            setCompleteFormVisible(false);
+          }
+        }}
+      >
         <View style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.6)", justifyContent: "center", alignItems: "center", padding: 16 }}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -2026,18 +2052,27 @@ export const TechnicianJobDetailsScreen = () => {
             <AppCard style={{ width: "100%", padding: 16, backgroundColor: theme.colors.background, borderRadius: 16, maxHeight: "100%" }}>
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }} style={{ width: "100%" }}>
                 {/* Header */}
-                <View style={{ borderBottomWidth: 1, borderColor: theme.colors.borderLight, paddingBottom: 12, marginBottom: 16 }}>
-                  <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.text }}>
-                    {job?.status === "COMPLETED" ? "Collect Payment" : "Complete Work Order"}
-                  </Text>
-                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
-                    Ticket: {job?.ticketNo}
-                  </Text>
+                <View style={{ borderBottomWidth: 1, borderColor: theme.colors.borderLight, paddingBottom: 12, marginBottom: 16, flexDirection: "row", alignItems: "center" }}>
+                  {completeStep === 2 && (
+                    <Pressable onPress={() => setCompleteStep(1)} style={{ marginRight: 10, padding: 4 }}>
+                      <ArrowLeft size={20} color={theme.colors.text} />
+                    </Pressable>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.text }}>
+                      {completeStep === 2 ? "Collect Payment" : "Complete Work Order"}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                      Ticket: {job?.ticketNo}
+                    </Text>
+                  </View>
                 </View>
-                {job?.status !== "COMPLETED" && (
+
+                {/* Step 1: Complete Job Form */}
+                {completeStep === 1 && (
                   <View style={{ marginBottom: 20 }}>
                     <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
-                      1. Work Summary & Photos
+                      Work Summary & Photos
                     </Text>
                     <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
                       <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
@@ -2116,7 +2151,7 @@ export const TechnicianJobDetailsScreen = () => {
                         </View>
                       </View>
 
-                      {/* Spare Parts Used — mandatory per-part warranty status, sent as sparePartsUsed on complete() */}
+                      {/* Spare Parts Used */}
                       <SparePartsSection
                         subCategoryId={job?.subCategoryId}
                         items={completionSpareParts}
@@ -2129,327 +2164,278 @@ export const TechnicianJobDetailsScreen = () => {
                   </View>
                 )}
 
-                {/* 2. Customer Signature Section (Skip if already completed) */}
-                {false && job?.status !== "COMPLETED" && (
+                {/* Step 2: Payment UI */}
+                {completeStep === 2 && (
                   <View style={{ marginBottom: 20 }}>
-                    <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
-                      2. Customer Verification
-                    </Text>
-                    <AppCard style={{ padding: 14 }}>
-                      <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 8 }}>
-                        Ask the customer to sign on the signature pad below:
-                      </Text>
-
-                      <View style={styles.padHeader}>
-                        <View style={styles.padLabelRow}>
-                          <PenLine size={16} color={theme.colors.primary} />
-                          <Text style={[styles.padLabel, { color: theme.colors.text, fontSize: 13 }]}>Signature Pad<Text style={{ color: theme.colors.danger }}> *</Text></Text>
-                        </View>
-                        <Pressable onPress={clearSignature} style={[styles.clearBtn, { backgroundColor: `${theme.colors.danger}12` }]}>
-                          <Trash2 size={12} color={theme.colors.danger} />
-                          <Text style={{ fontSize: 11, color: theme.colors.danger, fontWeight: "600" }}>Clear</Text>
-                        </Pressable>
-                      </View>
-
-                      <View
-                        style={[styles.signaturePad, { borderColor: hasSigned ? theme.colors.primary : theme.colors.border, backgroundColor: theme.colors.card }]}
-                        {...panResponder.panHandlers}
-                      >
-                        <Svg pointerEvents="none" width="100%" height={160} style={StyleSheet.absoluteFill}>
-                          {strokes.map((stroke, i) => (
-                            <Path
-                              key={i}
-                              d={buildPath(stroke)}
-                              stroke={theme.colors.text}
-                              strokeWidth={2.5}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              fill="none"
-                            />
-                          ))}
-                          {currentStroke.length > 0 && (
-                            <Path
-                              d={buildPath(currentStroke)}
-                              stroke={theme.colors.text}
-                              strokeWidth={2.5}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              fill="none"
-                            />
-                          )}
-                        </Svg>
-
-                        {!hasSigned && (
-                          <View style={styles.padPlaceholder} pointerEvents="none">
-                            <PenLine size={24} color={theme.colors.borderLight} />
-                            <Text style={{ fontSize: 12, color: theme.colors.textLight }}>Customer signature space</Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <AppInput
-                        label="Customer Remarks (optional)"
-                        placeholder="e.g. Good service..."
-                        value={remarks}
-                        onChangeText={setRemarks}
-                      />
-                    </AppCard>
-                  </View>
-                )}
-
-                {/* 3. Billing & Payment Section (Always show) */}
-                <View style={{ marginBottom: 20 }}>
-                  {job?.status !== "COMPLETED" && (
                     <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
-                      2. Billing & Payment
+                      Billing & Payment
                     </Text>
-                  )}
-                  <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
-                    <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>Base Service Charge ({currencySymbol})</Text>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        backgroundColor: "#f8fafc",
-                        borderWidth: 1.5,
-                        borderColor: theme.colors.border,
-                        borderRadius: 10,
-                        paddingHorizontal: 12,
-                        height: 46,
-                        gap: 8,
-                      }}
-                    >
-                      <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
-                      <TextInput
-                        value={amountStr}
-                        editable={false}
-                        style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
-                      />
-                    </View>
-
-                    {/* Extra charges */}
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 8 }}>
-                      <Text style={{ fontSize: 13, fontWeight: "600", color: theme.colors.text }}>Extra Charges</Text>
-                      <Pressable onPress={addExtraCharge} style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: `${theme.colors.primary}12` }}>
-                        <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>+ Add Item</Text>
-                      </Pressable>
-                    </View>
-
-                    {extraCharges.map((item) => (
-                      <View key={item.id} style={{ flexDirection: "row", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                        <TextInput
-                          value={item.name}
-                          onChangeText={(val) => updateExtraCharge(item.id, "name", val)}
-                          placeholder="Charge Item Name"
-                          style={{ flex: 1.5, height: 40, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, paddingHorizontal: 10, fontSize: 13, color: theme.colors.text, backgroundColor: theme.colors.card }}
-                        />
-                        <View style={{ flex: 1, flexDirection: "row", alignItems: "center", height: 40, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, paddingHorizontal: 10, backgroundColor: theme.colors.card, gap: 4 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>{currencySymbol}</Text>
-                          <TextInput
-                            value={item.amountStr}
-                            onChangeText={(val) => updateExtraCharge(item.id, "amountStr", val)}
-                            placeholder="0.00"
-                            keyboardType="decimal-pad"
-                            style={{ flex: 1, fontSize: 13, color: theme.colors.text, paddingVertical: 0 }}
-                          />
-                        </View>
-                        <Pressable onPress={() => removeExtraCharge(item.id)} style={{ padding: 6 }}>
-                          <Trash2 size={16} color={theme.colors.danger} />
-                        </Pressable>
-                      </View>
-                    ))}
-
-                    {/* Add Spare Part during payment — backend supports this independent of completion-time parts */}
-                    {job?.status === "COMPLETED" && (
-                      <SparePartsSection
-                        subCategoryId={job?.subCategoryId}
-                        items={paymentSpareParts}
-                        onChange={setPaymentSpareParts}
-                        title="Add Spare Part"
-                        subtitle="Extra parts used while collecting payment — billed on submit."
-                        invalidIds={paymentSparePartsInvalid}
-                      />
-                    )}
-
-                    {/* Payment Preview — backend-computed breakdown, never recalculated on device */}
-                    {paymentPreview ? (
-                      <View style={{ marginTop: 14, marginBottom: 4 }}>
-                        <PaymentSummaryCard
-                          title="Payment Preview"
-                          serviceCharge={paymentPreview.serviceCharge}
-                          serviceChargeWaived={paymentPreview.serviceChargeWaived}
-                          labourCharge={paymentPreview.labourCharge}
-                          labourChargeWaived={paymentPreview.labourChargeWaived}
-                          sparePartsAmount={paymentPreview.sparePartsAmount}
-                          warrantyPartsValue={paymentPreview.warrantyPartsValue}
-                          additionalCharge={paymentPreview.additionalCharge}
-                          discount={paymentPreview.discount}
-                          subtotal={paymentPreview.subtotal}
-                          gstPercent={paymentPreview.gstPercent}
-                          gstAmount={paymentPreview.gstAmount}
-                          grandTotal={paymentPreview.grandTotal}
-                          currency={currencySymbol}
-                        />
-                        {paymentSpareParts.length > 0 ? (
-                          <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 8, paddingHorizontal: 2, lineHeight: 15 }}>
-                            The spare parts added above aren't reflected in this preview yet — they're billed when you submit payment.
-                          </Text>
-                        ) : null}
-                      </View>
-                    ) : null}
-
-                    {/* NOTE: the old client-computed "Total billing breakdown" box (Service Amount /
-                        Platform Fee / Tax / Total Payable) has been removed — it duplicated the
-                        Payment Preview card above with a second, client-calculated grand total.
-                        The Payment Preview card is now the ONLY payment summary shown here; it is
-                        fed entirely by the backend (previewPayment), including whatever platform
-                        fee/shipping/handling/discount apply, via the additionalCharge/discount
-                        params already passed to it below. */}
-
-                    {/* Mode cash/upi */}
-                    <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>
-                    <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
-                      <Pressable
-                        onPress={() => setPaymentMode("CASH")}
+                    <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
+                      
+                      {/* Service Charge Input */}
+                      <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>Service Charge ({currencySymbol})</Text>
+                      <View
                         style={{
-                          flex: 1,
-                          height: 48,
-                          borderRadius: 8,
-                          borderWidth: 2,
-                          borderColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.borderLight,
-                          justifyContent: "center",
+                          flexDirection: "row",
                           alignItems: "center",
-                          backgroundColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.card,
-                          shadowColor: paymentMode === "CASH" ? theme.colors.primary : "#000",
-                          shadowOffset: { width: 0, height: 1 },
-                          shadowOpacity: paymentMode === "CASH" ? 0.3 : 0,
-                          shadowRadius: 2,
-                          elevation: paymentMode === "CASH" ? 2 : 0,
+                          backgroundColor: "#f8fafc",
+                          borderWidth: 1.5,
+                          borderColor: theme.colors.borderLight,
+                          borderRadius: 10,
+                          paddingHorizontal: 12,
+                          height: 46,
+                          gap: 8,
+                          marginTop: 4
                         }}
                       >
-                        <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "CASH" ? "#ffffff" : theme.colors.textMuted }}>CASH</Text>
-                      </Pressable>
-                      {paymentConfig?.upiEnabled && (
+                        <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
+                        <TextInput
+                          value={amountStr}
+                          editable={false}
+                          placeholder="0.00"
+                          style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
+                        />
+                      </View>
+
+                      {/* Labour Charge Input (Read-only, fetched from backend) */}
+                      {labour > 0 && (
+                        <>
+                          <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 16, fontSize: 13, fontWeight: "600" }]}>Labour Charge ({currencySymbol})</Text>
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              backgroundColor: "#f8fafc",
+                              borderWidth: 1.5,
+                              borderColor: theme.colors.borderLight,
+                              borderRadius: 10,
+                              paddingHorizontal: 12,
+                              height: 46,
+                              gap: 8,
+                              marginTop: 4
+                            }}
+                          >
+                            <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
+                            <TextInput
+                              value={labourChargeStr}
+                              editable={false}
+                              placeholder="0.00"
+                              style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
+                            />
+                          </View>
+                        </>
+                      )}
+
+                      {/* Read-Only Spare Parts Summary */}
+                      {completionSpareParts.length > 0 && (
+                        <View style={{ marginTop: 16, marginBottom: 4 }}>
+                          <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, marginBottom: 8, fontSize: 13, fontWeight: "600" }]}>
+                            Spare Parts Used
+                          </Text>
+                          <View style={{ borderRadius: 10, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: "#f8fafc", padding: 12 }}>
+                            {completionSpareParts.map((item, idx) => {
+                              const isWarranty = item.warrantyStatus === "WARRANTY";
+                              const itemTotal = isWarranty ? 0 : item.unitPrice * item.quantity;
+                              return (
+                                <View
+                                  key={item.localId || idx}
+                                  style={{
+                                    flexDirection: "row",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    paddingVertical: 6,
+                                    borderBottomWidth: idx === completionSpareParts.length - 1 ? 0 : 1,
+                                    borderColor: theme.colors.borderLight,
+                                  }}
+                                >
+                                  <View style={{ flex: 1, marginRight: 8 }}>
+                                    <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>{item.partName}</Text>
+                                    <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2 }}>
+                                      Qty: {item.quantity} · {currencySymbol}{item.unitPrice.toLocaleString("en-IN")} / unit
+                                    </Text>
+                                  </View>
+                                  <Text
+                                    style={{
+                                      fontSize: 12,
+                                      fontWeight: "700",
+                                      color: isWarranty ? theme.colors.success : theme.colors.text,
+                                    }}
+                                  >
+                                    {isWarranty ? "FREE (Warranty)" : `${currencySymbol}${itemTotal.toLocaleString("en-IN")}`}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      )}
+
+
+
+                      {/* Payment Preview — backend-computed breakdown */}
+                      {paymentPreview ? (
+                        <View style={{ marginTop: 14, marginBottom: 4 }}>
+                          <PaymentSummaryCard
+                            title="Payment Preview"
+                            serviceCharge={paymentPreview.serviceCharge}
+                            serviceChargeWaived={paymentPreview.serviceChargeWaived}
+                            labourCharge={paymentPreview.labourCharge}
+                            labourChargeWaived={paymentPreview.labourChargeWaived}
+                            sparePartsAmount={paymentPreview.sparePartsAmount}
+                            warrantyPartsValue={paymentPreview.warrantyPartsValue}
+                            additionalCharge={paymentPreview.additionalCharge}
+                            discount={paymentPreview.discount}
+                            subtotal={paymentPreview.subtotal}
+                            gstPercent={paymentPreview.gstPercent}
+                            gstAmount={paymentPreview.gstAmount}
+                            grandTotal={paymentPreview.grandTotal}
+                            currency={currencySymbol}
+                            spareParts={
+                              paymentSpareParts.length > 0
+                                ? paymentSpareParts.map((p) => ({
+                                    name: p.partName,
+                                    quantity: p.quantity,
+                                    unitPrice: p.unitPrice,
+                                    coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+                                  }))
+                                : undefined
+                            }
+                          />
+                        </View>
+                      ) : null}
+
+                      {/* Mode cash/upi */}
+                      <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>
+                      <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
                         <Pressable
-                          onPress={() => setPaymentMode("UPI")}
+                          onPress={() => setPaymentMode("CASH")}
                           style={{
                             flex: 1,
                             height: 48,
                             borderRadius: 8,
                             borderWidth: 2,
-                            borderColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.borderLight,
+                            borderColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.borderLight,
                             justifyContent: "center",
                             alignItems: "center",
-                            backgroundColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.card,
-                            shadowColor: paymentMode === "UPI" ? theme.colors.primary : "#000",
-                            shadowOffset: { width: 0, height: 1 },
-                            shadowOpacity: paymentMode === "UPI" ? 0.3 : 0,
-                            shadowRadius: 2,
-                            elevation: paymentMode === "UPI" ? 2 : 0,
+                            backgroundColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.card,
                           }}
                         >
-                          <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "UPI" ? "#ffffff" : theme.colors.textMuted }}>UPI</Text>
+                          <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "CASH" ? "#ffffff" : theme.colors.textMuted }}>CASH</Text>
                         </Pressable>
-                      )}
-                    </View>
+                        {paymentConfig?.upiEnabled && (
+                          <Pressable
+                            onPress={() => setPaymentMode("UPI")}
+                            style={{
+                              flex: 1,
+                              height: 48,
+                              borderRadius: 8,
+                              borderWidth: 2,
+                              borderColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.borderLight,
+                              justifyContent: "center",
+                              alignItems: "center",
+                              backgroundColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.card,
+                            }}
+                          >
+                            <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "UPI" ? "#ffffff" : theme.colors.textMuted }}>UPI</Text>
+                          </Pressable>
+                        )}
+                      </View>
 
-                    {paymentMode === "UPI" && (
-                      <View style={{ alignItems: "center", marginVertical: 14, padding: 16, backgroundColor: "#ffffff", borderRadius: 12, borderWidth: 1.5, borderColor: theme.colors.borderLight, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 }}>
-                        {(!paymentConfig || (!paymentConfig.upiId && !paymentConfig.upiQrImageUrl)) ? (
-                          <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
-                            UPI payment is not configured.
-                          </Text>
-                        ) : (
-                          <>
-                            {/* Scan finder frame around QR code */}
-                            <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
-                              {paymentConfig.upiQrImageUrl ? (
-                                <Image source={{ uri: paymentConfig.upiQrImageUrl }} style={{ width: 130, height: 130 }} resizeMode="contain" />
-                              ) : paymentConfig.upiId ? (
+                      {paymentMode === "UPI" && (
+                        <View style={{ alignItems: "center", marginVertical: 14, padding: 16, backgroundColor: "#ffffff", borderRadius: 12, borderWidth: 1.5, borderColor: theme.colors.borderLight }}>
+                          {(!paymentConfig || !paymentConfig.upiEnabled) ? (
+                            <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                              UPI payment is disabled.
+                            </Text>
+                          ) : !paymentConfig.upiId ? (
+                            <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                              UPI not available.
+                            </Text>
+                          ) : (
+                            <>
+                              <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
                                 <QRCode
-                                  value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
+                                  value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${paymentPreview ? paymentPreview.grandTotal : amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
                                   size={130}
                                 />
-                              ) : null}
+                              </View>
+
+                              <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "600", textAlign: "center", paddingHorizontal: 10 }}>
+                                Scan to Pay {currencySymbol}{(paymentPreview ? paymentPreview.grandTotal : amount).toLocaleString("en-IN")}
+                              </Text>
+
+                              {paymentConfig.upiAccountName && (
+                                <Text style={{ fontSize: 11, color: theme.colors.text, marginTop: 4, fontWeight: "500", textAlign: "center" }}>
+                                  Merchant: {paymentConfig.upiAccountName}
+                                </Text>
+                              )}
+
+                              {paymentConfig.upiId && (
+                                <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2, textAlign: "center" }}>
+                                  UPI ID: {paymentConfig.upiId}
+                                </Text>
+                              )}
+                            </>
+                          )}
+
+                          {paymentConfig && paymentConfig.upiId && (
+                            <View style={{ width: "100%", marginTop: 16, borderTopWidth: 1, borderColor: theme.colors.borderLight, paddingTop: 14 }}>
+                              <Text style={[styles.formLabel, { color: theme.colors.text, marginBottom: 8, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                                UPI Transaction ID (8-35 Characters)<Text style={{ color: theme.colors.danger }}> *</Text>
+                              </Text>
+                              <AppInput
+                                placeholder="Enter 12-digit transaction ID"
+                                value={transactionId}
+                                onChangeText={(val) => {
+                                  setTransactionId(val);
+                                  setTransactionIdError("");
+                                }}
+                                error={transactionIdError}
+                              />
                             </View>
+                          )}
+                        </View>
+                      )}
 
-                            <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "600", textAlign: "center", paddingHorizontal: 10 }}>
-                              Scan to Pay {currencySymbol}{amount.toLocaleString("en-IN")}
-                            </Text>
-
-                            {paymentConfig.upiAccountName && (
-                              <Text style={{ fontSize: 11, color: theme.colors.text, marginTop: 4, fontWeight: "500", textAlign: "center" }}>
-                                Merchant: {paymentConfig.upiAccountName}
-                              </Text>
-                            )}
-
-                            {paymentConfig.upiId && (
-                              <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2, textAlign: "center" }}>
-                                UPI ID: {paymentConfig.upiId}
-                              </Text>
-                            )}
-
-                            <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 4, textAlign: "center", paddingHorizontal: 10 }}>
-                              Scan this QR using Google Pay, PhonePe, Paytm or any UPI app.
-                            </Text>
-                          </>
-                        )}
-
-                        {paymentConfig && (paymentConfig.upiId || paymentConfig.upiQrImageUrl) && (
-                          <View style={{ width: "100%", marginTop: 16, borderTopWidth: 1, borderColor: theme.colors.borderLight, paddingTop: 14 }}>
-                            <Text style={[styles.formLabel, { color: theme.colors.text, marginBottom: 8, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
-                              UPI Transaction ID (8-35 Characters)<Text style={{ color: theme.colors.danger }}> *</Text>
-                            </Text>
-                            <AppInput
-                              placeholder="Enter 12-digit transaction ID"
-                              value={transactionId}
-                              onChangeText={(val) => {
-                                setTransactionId(val);
-                                setTransactionIdError("");
-                              }}
-                              error={transactionIdError}
-                            />
-                          </View>
-                        )}
-                      </View>
-                    )}
-
-                    <Pressable
-                      onPress={() => setPaymentConfirmed(!paymentConfirmed)}
-                      style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 14, paddingHorizontal: 4 }}
-                    >
-                      <View
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: 6,
-                          borderWidth: 2,
-                          borderColor: paymentConfirmed ? theme.colors.success : theme.colors.border,
-                          backgroundColor: paymentConfirmed ? theme.colors.success : theme.colors.card,
-                          justifyContent: "center",
-                          alignItems: "center",
-                        }}
+                      <Pressable
+                        onPress={() => setPaymentConfirmed(!paymentConfirmed)}
+                        style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 14, paddingHorizontal: 4 }}
                       >
-                        {paymentConfirmed && (
-                          <CheckCircle size={14} color="#ffffff" />
-                        )}
-                      </View>
-                      <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600", flex: 1 }}>
-                        Confirm payment of {currencySymbol}{amount.toLocaleString("en-IN")} has been received.
-                      </Text>
-                    </Pressable>
+                        <View
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 6,
+                            borderWidth: 2,
+                            borderColor: paymentConfirmed ? theme.colors.success : theme.colors.border,
+                            backgroundColor: paymentConfirmed ? theme.colors.success : theme.colors.card,
+                            justifyContent: "center",
+                            alignItems: "center",
+                          }}
+                        >
+                          {paymentConfirmed && (
+                            <CheckCircle size={14} color="#ffffff" />
+                          )}
+                        </View>
+                        <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600", flex: 1 }}>
+                          Confirm payment of {currencySymbol}{(paymentPreview ? paymentPreview.grandTotal : amount).toLocaleString("en-IN")} has been received.
+                        </Text>
+                      </Pressable>
+                    </View>
                   </View>
-                </View>
+                )}
 
                 {/* Bottom Buttons */}
                 <View style={[styles.btnRow, { marginTop: 8 }]}>
-                  <AppButton title="Cancel" variant="outline" onPress={() => setCompleteFormVisible(false)} style={{ flex: 1 }} />
+                  {completeStep !== 2 && (
+                    <AppButton title="Cancel" variant="outline" onPress={() => setCompleteFormVisible(false)} style={{ flex: 1 }} />
+                  )}
                   <AppButton
-                    title={job?.status === "COMPLETED" ? "Submit Payment" : "Submit & Complete Job"}
+                    title={completeStep === 2 ? "Collect Payment" : "Submit & Complete Job"}
                     variant="success"
-                    onPress={handleStep3Submit}
+                    onPress={completeStep === 2 ? handlePaymentSubmit : handleCompleteSubmit}
                     loading={submitting}
-                    style={{ flex: 1.8 }}
+                    style={{ flex: completeStep === 2 ? 1 : 1.8 }}
                   />
                 </View>
               </ScrollView>
@@ -2504,43 +2490,36 @@ export const TechnicianJobDetailsScreen = () => {
                 </View>
 
                 {paymentResult ? (
-                  <>
-                    <AppCard style={{ padding: 14, marginBottom: 12 }}>
-                      <View style={styles.paymentMetaRow}>
-                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Invoice Number</Text>
-                        <Text style={[styles.paymentMetaValue, { color: theme.colors.text }]}>{paymentResult.invoiceNumber}</Text>
-                      </View>
-                      <View style={styles.paymentMetaRow}>
-                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Payment Method</Text>
-                        <Text style={[styles.paymentMetaValue, { color: theme.colors.text }]}>{paymentMode === "CASH" ? "Cash" : "UPI"}</Text>
-                      </View>
-                      <View style={styles.paymentMetaRow}>
-                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Invoice Date</Text>
-                        <Text style={[styles.paymentMetaValue, { color: theme.colors.text }]}>
-                          {new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                        </Text>
-                      </View>
-                      <View style={styles.paymentMetaRow}>
-                        <Text style={[styles.paymentMetaLabel, { color: theme.colors.textMuted }]}>Payment Status</Text>
-                        <Text style={[styles.paymentMetaValue, { color: theme.colors.success }]}>Collected</Text>
-                      </View>
-                    </AppCard>
-
-                    <PaymentSummaryCard
-                      serviceCharge={paymentResult.serviceCharge}
-                      serviceChargeWaived={paymentResult.serviceChargeWaived}
-                      labourCharge={paymentResult.labourCharge}
-                      labourChargeWaived={paymentResult.labourChargeWaived}
-                      sparePartsAmount={paymentResult.sparePartsAmount}
-                      warrantyPartsValue={paymentResult.warrantyPartsValue}
-                      additionalCharge={paymentResult.additionalCharge}
-                      discount={paymentResult.discount}
-                      subtotal={paymentResult.subtotal}
-                      gstPercent={paymentResult.gstPercent}
-                      gstAmount={paymentResult.gstAmount}
-                      grandTotal={paymentResult.grandTotal}
-                    />
-                  </>
+                  <PaymentSummaryCard
+                    title="Payment Collected Summary"
+                    invoiceNumber={paymentResult.invoiceNumber}
+                    paymentMode={paymentMode === "CASH" ? "Cash" : "UPI"}
+                    paymentStatus="Collected"
+                    invoiceDate={new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                    serviceCharge={paymentResult.serviceCharge}
+                    serviceChargeWaived={paymentResult.serviceChargeWaived}
+                    labourCharge={paymentResult.labourCharge}
+                    labourChargeWaived={paymentResult.labourChargeWaived}
+                    sparePartsAmount={paymentResult.sparePartsAmount}
+                    warrantyPartsValue={paymentResult.warrantyPartsValue}
+                    additionalCharge={paymentResult.additionalCharge}
+                    discount={paymentResult.discount}
+                    subtotal={paymentResult.subtotal}
+                    gstPercent={paymentResult.gstPercent}
+                    gstAmount={paymentResult.gstAmount}
+                    grandTotal={paymentResult.grandTotal}
+                    currency={currencySymbol}
+                    spareParts={
+                      paymentSpareParts.length > 0
+                        ? paymentSpareParts.map((p) => ({
+                            name: p.partName,
+                            quantity: p.quantity,
+                            unitPrice: p.unitPrice,
+                            coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+                          }))
+                        : undefined
+                    }
+                  />
                 ) : null}
 
                 <AppButton

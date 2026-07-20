@@ -90,12 +90,30 @@ export const InvoiceDetailsScreen = () => {
   };
 
   const generatePDFHtml = (invoice: any, tenant: any) => {
-    const baseVal = Number(invoice.baseAmount ?? invoice.baseCharges ?? invoice.baseServiceCharge ?? invoice.subtotal ?? 0);
-    const extraVal = Number(invoice.extraChargesTotal ?? invoice.extraCharges ?? 0);
-    const gstVal = baseVal > 0 ? Number(invoice.gstAmount ?? invoice.gst ?? 0) : 0;
-    const rawTotalVal = Number(invoice.totalAmount ?? invoice.grandTotal ?? invoice.total ?? (baseVal + extraVal + gstVal));
-    const totalVal = baseVal > 0 ? rawTotalVal : (rawTotalVal - Number(invoice.gstAmount ?? invoice.gst ?? 0));
-    
+    const serviceCharge = Number(invoice.serviceCharge ?? 0);
+    const labourCharge = Number(invoice.labourCharge ?? 0);
+    const sparePartsAmount = Number(invoice.sparePartsAmount ?? 0);
+    const additionalCharge = Number(invoice.additionalCharge ?? 0);
+    const discount = Number(invoice.discount ?? 0);
+    const gstPercent = Number(invoice.gstPercent ?? 0);
+
+    const serviceChargeWaived = Boolean(invoice.payment?.serviceChargeWaived);
+    const labourChargeWaived = Boolean(invoice.payment?.labourChargeWaived);
+
+    // ── Calculations ──
+    const billableServiceCharge = serviceChargeWaived ? 0 : serviceCharge;
+    const billableLabourCharge = labourChargeWaived ? 0 : labourCharge;
+    const billableSpareParts = sparePartsAmount > 0 ? sparePartsAmount : 0;
+    const billableAdditional = additionalCharge > 0 ? additionalCharge : 0;
+    const billableDiscount = discount > 0 ? discount : 0;
+
+    const calculatedGst = (gstPercent > 0 && billableServiceCharge > 0)
+      ? Math.round((billableServiceCharge * gstPercent) / 100 * 100) / 100
+      : 0;
+
+    const calculatedSubtotal = billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
+    const calculatedTotal = Math.max(0, calculatedSubtotal + calculatedGst);
+
     const payMethod = invoice.paymentMethod ?? invoice.payment?.method ?? "—";
     const payStatus = invoice.paymentStatus ?? invoice.payment?.status ?? "—";
     const collAt = invoice.collectedAt ?? invoice.payment?.collectedAt;
@@ -103,7 +121,77 @@ export const InvoiceDetailsScreen = () => {
     const tktNum = invoice.ticketNumber ?? invoice.ticket?.ticketNumber ?? "—";
 
     const isPaid = payStatus === "COLLECTED" || payStatus === "PAID" || invoice.payment?.status === "COLLECTED" || invoice.payment?.status === "PAID";
-    const gstLabel = invoice.gstPercent > 0 ? `GST (${invoice.gstPercent}%)` : 'GST';
+
+    const chargeableParts = invoice.ticket?.spareParts?.filter((p: any) => p.coverageType === "OUT_OF_WARRANTY") ?? [];
+    const warrantyParts = invoice.ticket?.spareParts?.filter((p: any) => p.coverageType === "WARRANTY") ?? [];
+
+    let sparePartsHtml = "";
+    if (chargeableParts.length > 0 || warrantyParts.length > 0) {
+      sparePartsHtml = `
+        <div style="margin-top: 25px; border-top: 1px solid #e2e8f0; padding-top: 15px;">
+          <div style="font-size: 13px; font-weight: 800; text-transform: uppercase; color: #3b82f6; letter-spacing: 0.5px; margin-bottom: 12px;">Spare Parts</div>
+      `;
+
+      if (chargeableParts.length > 0) {
+        sparePartsHtml += `
+          <div style="font-size: 11px; font-weight: bold; color: #ef4444; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Chargeable</div>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px;">
+            <thead>
+              <tr style="border-bottom: 1px solid #e2e8f0; background-color: #f8fafc;">
+                <th style="text-align: left; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700;">Part Name</th>
+                <th style="text-align: center; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700; width: 60px;">Qty</th>
+                <th style="text-align: right; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700; width: 90px;">Unit Price</th>
+                <th style="text-align: right; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700; width: 90px;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${chargeableParts.map((p: any) => {
+                const total = p.unitPrice * p.quantity;
+                return `
+                  <tr style="border-bottom: 1px dashed #e2e8f0;">
+                    <td style="font-size: 12px; padding: 8px; font-weight: bold; color: #1e293b;">+ ${p.name}</td>
+                    <td style="text-align: center; font-size: 12px; padding: 8px; color: #1e293b;">${p.quantity}</td>
+                    <td style="text-align: right; font-size: 12px; padding: 8px; color: #1e293b;">₹${p.unitPrice.toLocaleString('en-IN')}</td>
+                    <td style="text-align: right; font-size: 12px; padding: 8px; font-weight: bold; color: #1e293b;">₹${total.toLocaleString('en-IN')}</td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      if (warrantyParts.length > 0) {
+        sparePartsHtml += `
+          <div style="font-size: 11px; font-weight: bold; color: #10b981; margin-top: 10px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Warranty Covered</div>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px;">
+            <thead>
+              <tr style="border-bottom: 1px solid #e2e8f0; background-color: #f8fafc;">
+                <th style="text-align: left; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700;">Part Name</th>
+                <th style="text-align: center; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700; width: 60px;">Qty</th>
+                <th style="text-align: right; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700; width: 90px;">Face Value</th>
+                <th style="text-align: right; font-size: 10px; padding: 6px 8px; color: #64748b; text-transform: uppercase; font-weight: 700; width: 90px;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${warrantyParts.map((p: any) => {
+                const total = p.unitPrice * p.quantity;
+                return `
+                  <tr style="border-bottom: 1px dashed #e2e8f0;">
+                    <td style="font-size: 12px; padding: 8px; font-weight: bold; color: #10b981;">- ${p.name}</td>
+                    <td style="text-align: center; font-size: 12px; padding: 8px; color: #1e293b;">${p.quantity}</td>
+                    <td style="text-align: right; font-size: 12px; padding: 8px; text-decoration: line-through; color: #94a3b8;">₹${p.unitPrice.toLocaleString('en-IN')}</td>
+                    <td style="text-align: right; font-size: 12px; padding: 8px; font-weight: bold; color: #10b981;">FREE</td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      sparePartsHtml += `</div>`;
+    }
 
     return `
       <!DOCTYPE html>
@@ -155,9 +243,9 @@ export const InvoiceDetailsScreen = () => {
               </div>
               <div class="paid-badge">${isPaid ? "PAID" : "PENDING"}</div>
             </div>
-
+ 
             <div class="divider"></div>
-
+ 
             <div class="meta-grid">
               <div>
                 <div class="meta-label">Invoice Number</div>
@@ -183,9 +271,9 @@ export const InvoiceDetailsScreen = () => {
                 <div class="meta-value-sub">Ph: ${invoice.ticket.technician.phone}</div>
               </div>` : ""}
             </div>
-
+ 
             <div class="divider"></div>
-
+ 
             <table class="items-table">
               <thead>
                 <tr>
@@ -194,32 +282,47 @@ export const InvoiceDetailsScreen = () => {
                 </tr>
               </thead>
               <tbody>
+                ${serviceCharge > 0 ? `
                 <tr>
                   <td>
-                    <strong>${invoice.ticket?.subCategory?.name || "General Service"}</strong><br>
+                    <strong>${invoice.ticket?.subCategory?.name || "General Service"}${serviceChargeWaived ? " (Covered by AMC)" : ""}</strong><br>
                     <span style="font-size:11px;color:#94a3b8;">${invoice.ticket?.description || invoice.ticket?.subCategory?.category?.name || ""}</span>
                   </td>
-                  <td class="td-right">₹${baseVal.toLocaleString("en-IN")}</td>
+                  <td class="td-right">${serviceChargeWaived ? "FREE" : `₹${serviceCharge.toLocaleString("en-IN")}`}</td>
                 </tr>
-                ${extraVal > 0 ? `
+                ` : ""}
+                ${labourCharge > 0 ? `
                 <tr>
                   <td>
-                    <strong>Extra Charges / Spares</strong><br>
-                    <span style="font-size:11px;color:#94a3b8;">Additional parts or services</span>
+                    <strong>Labour Charge${labourChargeWaived ? " (Covered by AMC)" : ""}</strong>
                   </td>
-                  <td class="td-right">₹${extraVal.toLocaleString("en-IN")}</td>
+                  <td class="td-right">${labourChargeWaived ? "FREE" : `₹${labourCharge.toLocaleString("en-IN")}`}</td>
+                </tr>
+                ` : ""}
+                ${billableSpareParts > 0 ? `
+                <tr>
+                  <td>
+                    <strong>Chargeable Spare Parts</strong><br>
+                    <span style="font-size:11px;color:#94a3b8;">Parts not covered under warranty</span>
+                  </td>
+                  <td class="td-right">₹${billableSpareParts.toLocaleString("en-IN")}</td>
                 </tr>
                 ` : ""}
               </tbody>
             </table>
-
+ 
+            ${sparePartsHtml}
+ 
             <div class="totals-section">
-              <div class="totals-row"><span>Base Charges</span><span>₹${baseVal.toLocaleString("en-IN")}</span></div>
-              <div class="totals-row"><span>Extra Charges</span><span>₹${extraVal.toLocaleString("en-IN")}</span></div>
-              <div class="totals-row"><span>${gstLabel}</span><span>₹${gstVal.toLocaleString("en-IN")}</span></div>
-              <div class="totals-row grand"><span>Total Amount</span><span>₹${totalVal.toLocaleString("en-IN")}</span></div>
+              ${billableServiceCharge > 0 ? `<div class="totals-row"><span>Base Service Charge</span><span>₹${billableServiceCharge.toLocaleString("en-IN")}</span></div>` : ""}
+              ${billableLabourCharge > 0 ? `<div class="totals-row"><span>Labour Charge</span><span>₹${billableLabourCharge.toLocaleString("en-IN")}</span></div>` : ""}
+              ${billableSpareParts > 0 ? `<div class="totals-row"><span>Spare Parts</span><span>₹${billableSpareParts.toLocaleString("en-IN")}</span></div>` : ""}
+              ${billableAdditional > 0 ? `<div class="totals-row"><span>Extra Charges</span><span>₹${billableAdditional.toLocaleString("en-IN")}</span></div>` : ""}
+              ${billableDiscount > 0 ? `<div class="totals-row"><span>Discount</span><span>-₹${billableDiscount.toLocaleString("en-IN")}</span></div>` : ""}
+              ${calculatedGst > 0 ? `<div class="totals-row"><span>GST (${gstPercent}%)</span><span>₹${calculatedGst.toLocaleString("en-IN")}</span></div>` : ""}
+              <div class="totals-row grand"><span>Total Amount</span><span>₹${calculatedTotal.toLocaleString("en-IN")}</span></div>
             </div>
-
+ 
             <div class="payment-box">
               <div>
                 <div class="payment-label">Payment Method</div>
@@ -235,7 +338,7 @@ export const InvoiceDetailsScreen = () => {
                 <div class="payment-val">${formatDate(collAt)}</div>
               </div>` : ""}
             </div>
-
+ 
             <div class="footer">
               Thank you for choosing <strong>${tenant?.companyName || "FieldEaze"}</strong>!<br>
               For queries: ${tenant?.email || "support@fieldeaze.com"}${tenant?.phone ? " | " + tenant.phone : ""}
@@ -364,12 +467,14 @@ export const InvoiceDetailsScreen = () => {
             labourCharge={Number(invoice.labourCharge ?? 0)}
             labourChargeWaived={Boolean(invoice.payment?.labourChargeWaived)}
             sparePartsAmount={Number(invoice.sparePartsAmount ?? 0)}
+            warrantyPartsValue={(invoice as any)?.warrantyPartsValue ?? (invoice as any)?.warrantySavings ?? (invoice.payment as any)?.warrantyPartsValue}
             additionalCharge={Number(invoice.additionalCharge ?? 0)}
             discount={Number(invoice.discount ?? 0)}
             subtotal={Number(invoice.subtotal ?? baseAmount)}
             gstPercent={Number(invoice.gstPercent ?? 0)}
             gstAmount={gstAmount}
             grandTotal={totalAmount}
+            spareParts={invoice.ticket?.spareParts}
           />
         </View>
 

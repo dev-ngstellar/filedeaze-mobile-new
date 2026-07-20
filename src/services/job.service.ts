@@ -158,6 +158,7 @@ export interface Ticket {
    * row itself doesn't store this, only the Payment row does. */
   paymentServiceChargeWaived?: boolean;
   paymentLabourChargeWaived?: boolean;
+  paymentWarrantyPartsValue?: number;
   paymentStatus?: string;
   gstEnabled?: boolean;
   gstPercent?: number;
@@ -177,6 +178,16 @@ export interface Ticket {
   isAmcCovered?: boolean;
   /** Current AMC coverage summary for the ticket's asset. Only present on ticket detail responses. */
   amcStatus?: TicketAmcStatus | null;
+  /** Itemised spare parts used on this ticket — populated from the API response on detail views.
+   * Matches the TicketSparePart shape the backend returns. */
+  spareParts?: {
+    id: string;
+    sparePartId: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    coverageType: "WARRANTY" | "OUT_OF_WARRANTY";
+  }[];
 }
 
 export interface Invoice {
@@ -290,6 +301,7 @@ export function normalizeTicket(raw: any): Ticket {
     invoiceDiscount: raw.invoice?.discount != null ? Number(raw.invoice.discount) : undefined,
     paymentServiceChargeWaived: raw.payment?.serviceChargeWaived ?? undefined,
     paymentLabourChargeWaived: raw.payment?.labourChargeWaived ?? undefined,
+    paymentWarrantyPartsValue: raw.payment?.warrantyPartsValue != null ? Number(raw.payment.warrantyPartsValue) : (raw.invoice?.warrantySavings != null ? Number(raw.invoice.warrantySavings) : undefined),
     paymentStatus: raw.payment?.status ?? undefined,
     gstEnabled: raw.gstEnabled ?? false,
     gstPercent: raw.gstPercent != null ? Number(raw.gstPercent) : 0,
@@ -308,6 +320,16 @@ export function normalizeTicket(raw: any): Ticket {
     } : undefined,
     isAmcCovered: raw.isAmcCovered ?? false,
     amcStatus: raw.amcStatus ?? undefined,
+    spareParts: Array.isArray(raw.spareParts)
+      ? raw.spareParts.map((p: any) => ({
+          id: p.id ?? "",
+          sparePartId: p.sparePartId ?? "",
+          name: p.name ?? p.partName ?? "—",
+          quantity: Number(p.quantity ?? 1),
+          unitPrice: Number(p.unitPrice ?? 0),
+          coverageType: (p.coverageType ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+        }))
+      : undefined,
   };
 }
 
@@ -665,11 +687,11 @@ export class JobService {
     const list = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : Array.isArray(body?.data?.items) ? body.data.items : Array.isArray(body?.items) ? body.items : [];
     return list.map((p: any) => ({
       id: p.id,
-      partName: p.partName,
+      partName: p.name,
       partNumber: p.partNumber ?? null,
       description: p.description ?? null,
-      unitPrice: Number(p.unitPrice) || 0,
-      unitOfMeasure: p.unitOfMeasure,
+      unitPrice: Number(p.price) || 0,
+      unitOfMeasure: p.unit,
     }));
   }
 

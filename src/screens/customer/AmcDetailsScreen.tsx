@@ -236,6 +236,24 @@ export const AmcDetailsScreen = () => {
                 {sub.customerAsset?.serialNumber ?? "—"}
               </Text>
             </View>
+
+            {(sub.status === "ACTIVE" || sub.status === "RENEWED") && (
+              <AppButton
+                title="Raise Service"
+                variant="primary"
+                icon={<Wrench size={16} color="#ffffff" style={{ marginRight: 6 }} />}
+                onPress={() => {
+                  navigation.navigate("RaiseTicket", {
+                    assetId: sub.customerAsset?.id || sub.customerAssetId,
+                    assetName: sub.customerAsset?.name || "Covered Equipment",
+                    contractId: sub.id,
+                    bookingMode: "AMC",
+                    fromAMC: true,
+                  });
+                }}
+                style={{ marginTop: 14 }}
+              />
+            )}
           </AppCard>
         </View>
 

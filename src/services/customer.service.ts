@@ -127,6 +127,7 @@ export interface CustomerTicketDetail {
     serviceChargeWaived: boolean;
     labourChargeWaived: boolean;
     sparePartsWaived: boolean;
+    warrantyPartsValue?: number | null;
     additionalCharge: number;
     discount: number;
   } | null;
@@ -136,6 +137,7 @@ export interface CustomerTicketDetail {
     serviceCharge: number;
     labourCharge: number;
     sparePartsAmount: number;
+    warrantyPartsValue?: number | null;
     additionalCharge: number;
     discount: number;
     subtotal: number;

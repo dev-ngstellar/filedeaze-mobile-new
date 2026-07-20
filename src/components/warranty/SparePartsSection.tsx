@@ -41,16 +41,16 @@ export const SparePartsSection: React.FC<SparePartsSectionProps> = ({
     refetch: refetchCatalog,
   } = useSparePartsCatalog(subCategoryId, pickerVisible);
 
-  const handleSelectPart = (part: SparePartCatalogItem) => {
-    const draft: SparePartUsageDraft = {
+  const handleSelectParts = (selectedParts: SparePartCatalogItem[]) => {
+    const newDrafts: SparePartUsageDraft[] = selectedParts.map((part) => ({
       localId: nextLocalId(),
       sparePartId: part.id,
       partName: part.partName,
       unitPrice: part.unitPrice,
       quantity: 1,
       warrantyStatus: null,
-    };
-    onChange([...items, draft]);
+    }));
+    onChange([...items, ...newDrafts]);
     setPickerVisible(false);
   };
 
@@ -98,7 +98,7 @@ export const SparePartsSection: React.FC<SparePartsSectionProps> = ({
       <SparePartPickerModal
         visible={pickerVisible}
         onClose={() => setPickerVisible(false)}
-        onSelect={handleSelectPart}
+        onSelect={handleSelectParts}
         parts={catalog}
         isLoading={isCatalogLoading}
         isError={isCatalogError}

@@ -95,6 +95,7 @@ export const CustomerHomeScreen = () => {
   const featuredIndexRef = useRef(0);
 
   // Queries
+  const [bookingMode, setBookingMode] = useState<"NORMAL" | "AMC">("NORMAL");
   const { data: categories = [], isLoading: isCategoriesLoading } = useCategories();
   const {
     data: tickets = [],
@@ -428,25 +429,10 @@ export const CustomerHomeScreen = () => {
             activeTab === "PROFILE"
               ? "Profile Details"
               : activeTab === "TICKETS"
-              ? "Service History"
-              : undefined
+                ? "Service History"
+                : undefined
           }
-          rightAction={
-            // Customers without an active AMC reach Tickets via its own bottom tab — showing this
-            // icon too would give them two paths to the same screen. AMC customers keep it as-is,
-            // since Tickets stays a header-only destination for them (Assets owns the bottom tab).
-            hasActiveAmc && activeTab !== "PROFILE" && activeTab !== "TICKETS" ? (
-              <Pressable
-                onPress={() => setActiveTab("TICKETS")}
-                style={({ pressed }) => [
-                  { padding: 8 },
-                  pressed && { opacity: 0.7 },
-                ]}
-              >
-                <ClipboardList size={22} color={theme.colors.primary} />
-              </Pressable>
-            ) : undefined
-          }
+          rightAction={undefined}
         />
 
         {/* Reusable Customer Logout Popup */}
@@ -467,33 +453,124 @@ export const CustomerHomeScreen = () => {
         {/* Drawer Removed */}
 
         {/* Main Content View below header & Customer Account Banner */}
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing()}
-              onRefresh={handleRefresh}
-              tintColor={theme.colors.primary}
-            />
-          }
-        >
-          {activeTab === "HOME" && (
-            <View>
-              {/* Location Bar */}
-              <View style={[styles.locationBar, { backgroundColor: theme.colors.card }]}>
-                <View style={styles.locationLeft}>
-                  <MapPin size={16} color={theme.colors.primary} />
-                  <View style={{ marginLeft: 8, flex: 1 }}>
-                    <Text style={[styles.locationLabel, { color: theme.colors.textMuted }]}>Your Location</Text>
-                    <Text style={[styles.locationAddr, { color: theme.colors.text }]} numberOfLines={1}>
-                      {profile?.address
-                        ? [profile.address, profile.city].filter(Boolean).join(", ")
-                        : "Set your address"}
-                    </Text>
-                  </View>
+        {bookingMode === "AMC" && activeTab === "HOME" ? (
+          <View style={{ flex: 1 }}>
+            {/* Location Bar */}
+            <View style={[styles.locationBar, { backgroundColor: theme.colors.card, marginBottom: 0 }]}>
+              <View style={styles.locationLeft}>
+                <MapPin size={16} color={theme.colors.primary} />
+                <View style={{ marginLeft: 8, flex: 1 }}>
+                  <Text style={[styles.locationLabel, { color: theme.colors.textMuted }]}>Your Location</Text>
+                  <Text style={[styles.locationAddr, { color: theme.colors.text }]} numberOfLines={1}>
+                    {profile?.address
+                      ? [profile.address, profile.city].filter(Boolean).join(", ")
+                      : "Set your address"}
+                  </Text>
                 </View>
               </View>
+            </View>
+
+            {/* AMC Customer Service Mode Switcher */}
+            {hasActiveAmc && (
+              <View style={{ flexDirection: "row", backgroundColor: theme.colors.card, borderRadius: 12, padding: 4, marginHorizontal: 16, marginTop: 12, marginBottom: 4, borderWidth: 1, borderColor: theme.colors.borderLight }}>
+                <Pressable
+                  onPress={() => setBookingMode("NORMAL")}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    backgroundColor: (bookingMode as string) === "NORMAL" ? theme.colors.primary : "transparent",
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: (bookingMode as string) === "NORMAL" ? "#ffffff" : theme.colors.textMuted }}>
+                    Normal Service
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => setBookingMode("AMC")}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    backgroundColor: (bookingMode as string) === "AMC" ? theme.colors.primary : "transparent",
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: (bookingMode as string) === "AMC" ? "#ffffff" : theme.colors.textMuted }}>
+                    AMC Service
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+
+            <CustomerAssetsScreen />
+          </View>
+        ) : (
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={isRefreshing()}
+                onRefresh={handleRefresh}
+                tintColor={theme.colors.primary}
+              />
+            }
+          >
+            {activeTab === "HOME" && (
+              <View>
+                {/* Location Bar */}
+                <View style={[styles.locationBar, { backgroundColor: theme.colors.card }]}>
+                  <View style={styles.locationLeft}>
+                    <MapPin size={16} color={theme.colors.primary} />
+                    <View style={{ marginLeft: 8, flex: 1 }}>
+                      <Text style={[styles.locationLabel, { color: theme.colors.textMuted }]}>Your Location</Text>
+                      <Text style={[styles.locationAddr, { color: theme.colors.text }]} numberOfLines={1}>
+                        {profile?.address
+                          ? [profile.address, profile.city].filter(Boolean).join(", ")
+                          : "Set your address"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* AMC Customer Service Mode Switcher */}
+                {hasActiveAmc && (
+                  <View style={{ flexDirection: "row", backgroundColor: theme.colors.card, borderRadius: 12, padding: 4, marginHorizontal: 16, marginTop: 12, marginBottom: 4, borderWidth: 1, borderColor: theme.colors.borderLight }}>
+                    <Pressable
+                      onPress={() => setBookingMode("NORMAL")}
+                      style={{
+                        flex: 1,
+                        paddingVertical: 10,
+                        borderRadius: 8,
+                        backgroundColor: bookingMode === "NORMAL" ? theme.colors.primary : "transparent",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: "700", color: bookingMode === "NORMAL" ? "#ffffff" : theme.colors.textMuted }}>
+                        Normal Service
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => setBookingMode("AMC")}
+                      style={{
+                        flex: 1,
+                        paddingVertical: 10,
+                        borderRadius: 8,
+                        backgroundColor: bookingMode === "AMC" ? theme.colors.primary : "transparent",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: "700", color: bookingMode === "AMC" ? "#ffffff" : theme.colors.textMuted }}>
+                        AMC Service
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
+
 
               {/* Search Bar + Dropdown */}
               <View style={[styles.homeSearchWrap, { zIndex: 100, elevation: 100 }]}>
@@ -561,7 +638,11 @@ export const CustomerHomeScreen = () => {
                             ]}
                             onPress={() => {
                               setSearchQuery("");
-                              navigation.navigate("RaiseTicket", { categoryId: cat.id, categoryName: cat.name });
+                              navigation.navigate("RaiseTicket", {
+                                categoryId: cat.id,
+                                categoryName: cat.name,
+                                bookingMode: hasActiveAmc ? bookingMode : "NORMAL",
+                              });
                             }}
                           >
                             <Image source={{ uri: getCatImage(cat.name) }} style={styles.searchDropdownImg} resizeMode="cover" />
@@ -607,7 +688,11 @@ export const CustomerHomeScreen = () => {
                             <Text style={styles.featuredBannerSub}>Experts at your doorstep</Text>
                             <Pressable
                               style={[styles.featuredBannerBtn, { backgroundColor: theme.colors.primary }]}
-                              onPress={() => navigation.navigate("RaiseTicket", { categoryId: cat.id, categoryName: cat.name })}
+                              onPress={() => navigation.navigate("RaiseTicket", {
+                                categoryId: cat.id,
+                                categoryName: cat.name,
+                                bookingMode: hasActiveAmc ? bookingMode : "NORMAL",
+                              })}
                             >
                               <Text style={styles.featuredBannerBtnText}>Book Now</Text>
                             </Pressable>
@@ -672,7 +757,11 @@ export const CustomerHomeScreen = () => {
                             { backgroundColor: theme.colors.card, width: CAT_CARD_W },
                             pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
                           ]}
-                          onPress={() => navigation.navigate("RaiseTicket", { categoryId: cat.id, categoryName: cat.name })}
+                          onPress={() => navigation.navigate("RaiseTicket", {
+                            categoryId: cat.id,
+                            categoryName: cat.name,
+                            bookingMode: hasActiveAmc ? bookingMode : "NORMAL",
+                          })}
                         >
                           <View style={[styles.catImageWrap, { backgroundColor: theme.colors.background }]}>
                             <Image
@@ -1306,6 +1395,7 @@ export const CustomerHomeScreen = () => {
             </View>
           )}
         </ScrollView>
+      )}
 
         {/* Sticky Bottom Navigation Bar */}
         <View style={[
@@ -1323,21 +1413,12 @@ export const CustomerHomeScreen = () => {
             </View>
             <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "HOME" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "HOME" ? "700" : "500" }]}>Home</Text>
           </Pressable>
-          {hasActiveAmc ? (
-            <Pressable style={styles.navItem} onPress={() => setActiveTab("AMC")}>
-              <View style={[styles.navIconWrap, activeTab === "AMC" && { backgroundColor: `${theme.colors.primary}18` }]}>
-                <Shield size={tabIconSize} color={activeTab === "AMC" ? theme.colors.primary : theme.colors.textMuted} />
-              </View>
-              <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "AMC" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "AMC" ? "700" : "500" }]}>Assets</Text>
-            </Pressable>
-          ) : (
-            <Pressable style={styles.navItem} onPress={() => setActiveTab("TICKETS")}>
-              <View style={[styles.navIconWrap, activeTab === "TICKETS" && { backgroundColor: `${theme.colors.primary}18` }]}>
-                <ClipboardList size={tabIconSize} color={activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted} />
-              </View>
-              <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "TICKETS" ? "700" : "500" }]}>Tickets</Text>
-            </Pressable>
-          )}
+          <Pressable style={styles.navItem} onPress={() => setActiveTab("TICKETS")}>
+            <View style={[styles.navIconWrap, activeTab === "TICKETS" && { backgroundColor: `${theme.colors.primary}18` }]}>
+              <ClipboardList size={tabIconSize} color={activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted} />
+            </View>
+            <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "TICKETS" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "TICKETS" ? "700" : "500" }]}>Tickets</Text>
+          </Pressable>
           <Pressable style={styles.navItem} onPress={() => setActiveTab("PAYMENTS")}>
             <View style={[styles.navIconWrap, activeTab === "PAYMENTS" && { backgroundColor: `${theme.colors.primary}18` }]}>
               <CreditCard size={tabIconSize} color={activeTab === "PAYMENTS" ? theme.colors.primary : theme.colors.textMuted} />
@@ -1534,32 +1615,35 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
-    paddingVertical: 10,
-    paddingBottom: Platform.OS === "ios" ? 26 : 10,
+    paddingTop: 8,
+    paddingBottom: Platform.OS === "ios" ? 26 : 8,
     backgroundColor: "#ffffff",
-    shadowColor: "rgba(15,23,42,0.10)",
-    shadowOffset: { width: 0, height: -3 },
+    borderTopWidth: 1,
+    borderTopColor: "rgba(226, 232, 240, 0.8)",
+    shadowColor: "rgba(15,23,42,0.06)",
+    shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 1,
-    shadowRadius: 10,
-    elevation: 12,
+    shadowRadius: 12,
+    elevation: 10,
   },
   navItem: {
     alignItems: "center",
     justifyContent: "center",
     flex: 1,
-    gap: 3,
+    paddingVertical: 2,
   },
   navIconWrap: {
-    width: 48,
-    height: 30,
-    borderRadius: 15,
+    width: 52,
+    height: 32,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
   },
   navLabel: {
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: "500",
     letterSpacing: 0.1,
+    marginTop: 3,
   },
   profileLogoutBtn: {
     flexDirection: "row",

@@ -66,8 +66,8 @@ export const SparePartUsageRow: React.FC<SparePartUsageRowProps> = ({
         </View>
       </View>
 
-      <View style={{ marginTop: 10 }}>
-        <Text style={[styles.qtyLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>
+      <View style={{ marginTop: 8 }}>
+        <Text style={[styles.qtyLabel, { color: theme.colors.textMuted, marginBottom: 4 }]}>
           Warranty Status <Text style={{ color: theme.colors.danger }}>*</Text>
         </Text>
         <WarrantySelector value={item.warrantyStatus} onChange={onChangeWarranty} error={warrantyError} />
@@ -84,25 +84,25 @@ export const SparePartUsageRow: React.FC<SparePartUsageRowProps> = ({
 };
 
 const styles = StyleSheet.create({
-  card: { padding: 14, marginBottom: 10 },
-  headerRow: { flexDirection: "row", alignItems: "flex-start" },
+  card: { padding: 12, marginBottom: 8 },
+  headerRow: { flexDirection: "row", alignItems: "center" },
   partName: { fontSize: 13, fontWeight: "700" },
-  unitPrice: { fontSize: 11, marginTop: 2 },
+  unitPrice: { fontSize: 11, marginTop: 1 },
   removeBtn: { padding: 4 },
-  qtyRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
-  qtyLabel: { fontSize: 12, fontWeight: "600" },
-  stepper: { flexDirection: "row", alignItems: "center", gap: 10 },
-  stepperBtn: { width: 28, height: 28, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  qtyValue: { fontSize: 14, fontWeight: "700", minWidth: 20, textAlign: "center" },
+  qtyRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
+  qtyLabel: { fontSize: 11, fontWeight: "600" },
+  stepper: { flexDirection: "row", alignItems: "center", gap: 6 },
+  stepperBtn: { width: 24, height: 24, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  qtyValue: { fontSize: 13, fontWeight: "700", minWidth: 16, textAlign: "center" },
   estimateRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 12,
-    paddingTop: 10,
+    marginTop: 8,
+    paddingTop: 8,
     borderTopWidth: 1,
   },
-  estimateLabel: { fontSize: 11 },
+  estimateLabel: { fontSize: 11, fontWeight: "500" },
   estimateValue: { fontSize: 12, fontWeight: "700" },
 });
 

@@ -50,7 +50,12 @@ export const WarrantySelector: React.FC<WarrantySelectorProps> = ({ value, onCha
               >
                 {isSelected ? <View style={[styles.radioInner, { backgroundColor: theme.colors.primary }]} /> : null}
               </View>
-              <Text style={[styles.optionLabel, { color: isSelected ? theme.colors.primary : theme.colors.text }]}>
+              <Text
+                style={[styles.optionLabel, { color: isSelected ? theme.colors.primary : theme.colors.text }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
                 {opt.label}
               </Text>
             </Pressable>
@@ -65,27 +70,27 @@ export const WarrantySelector: React.FC<WarrantySelectorProps> = ({ value, onCha
 };
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", gap: 10 },
+  row: { flexDirection: "row", gap: 6 },
   option: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1.5,
-    borderRadius: 10,
+    borderRadius: 8,
     paddingVertical: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 6,
   },
   radioOuter: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.8,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 8,
+    marginRight: 6,
   },
-  radioInner: { width: 8, height: 8, borderRadius: 4 },
-  optionLabel: { fontSize: 12, fontWeight: "700" },
+  radioInner: { width: 6, height: 6, borderRadius: 3 },
+  optionLabel: { fontSize: 11, fontWeight: "700" },
   errorText: { fontSize: 11, fontWeight: "500", marginTop: 4 },
 });
 

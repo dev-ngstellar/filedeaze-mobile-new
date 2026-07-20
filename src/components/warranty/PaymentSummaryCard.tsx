@@ -1,9 +1,19 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
-import { ShieldCheck, Receipt } from "lucide-react-native";
+import { ShieldCheck, Receipt, Package, PackageCheck } from "lucide-react-native";
 import { useTheme } from "../../theme";
 import { AppCard } from "../AppCard";
 import { AppButton } from "../AppButton";
+
+/** A single spare-part line for display — passed from either paymentSpareParts state (live
+ * preview) or the API response spareParts array (persisted invoice / success view). */
+export interface SparePartDisplayItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  /** "WARRANTY" = no cost, covered; "OUT_OF_WARRANTY" = chargeable */
+  coverageType: "WARRANTY" | "OUT_OF_WARRANTY";
+}
 
 export interface PaymentSummaryCardProps {
   title?: string;
@@ -32,6 +42,10 @@ export interface PaymentSummaryCardProps {
   gstAmount?: number;
   grandTotal: number;
   currency?: string;
+  /** Itemised spare parts — chargeable (OUT_OF_WARRANTY) are shown with a + prefix,
+   * warranty parts with a - prefix (they are covered at no cost). When omitted the
+   * Spare Parts section is not rendered. */
+  spareParts?: SparePartDisplayItem[];
 }
 
 /** Universal payment breakdown — Service/Labour/Chargeable Spare Parts/Warranty Savings/
@@ -61,10 +75,42 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
   gstAmount,
   grandTotal,
   currency = "₹",
+  spareParts,
 }) => {
   const theme = useTheme();
   const fmt = (n: number) => `${currency}${n.toLocaleString("en-IN")}`;
   const amcApplied = !!serviceChargeWaived || !!labourChargeWaived;
+
+  // Calculate values according to requirements:
+  // 1. Service Charge: billable if > 0 and not waived
+  const billableServiceCharge = (serviceCharge > 0 && !serviceChargeWaived) ? serviceCharge : 0;
+
+  // 2. GST: calculated ONLY on Service Charge (if GST is enabled and serviceCharge > 0)
+  const isGstEnabled = gstPercent !== undefined && gstPercent > 0;
+  const calculatedGstAmount = (isGstEnabled && billableServiceCharge > 0)
+    ? Math.round((billableServiceCharge * gstPercent) / 100 * 100) / 100
+    : 0;
+
+  // 3. Labour Charge: billable if > 0 and not waived
+  const billableLabourCharge = (labourCharge > 0 && !labourChargeWaived) ? labourCharge : 0;
+
+  // 4. Spare Parts Amount:
+  const billableSpareParts = sparePartsAmount > 0 ? sparePartsAmount : 0;
+
+  // 5. Additional / other charges:
+  const billableAdditional = additionalCharge && additionalCharge > 0 ? additionalCharge : 0;
+
+  // 6. Discount:
+  const billableDiscount = discount && discount > 0 ? discount : 0;
+
+  // 7. Subtotal and Grand Total:
+  const displaySubtotal = billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
+  const displayGrandTotal = Math.max(0, displaySubtotal + calculatedGstAmount);
+
+  // Split spare parts by coverage type for the itemised section
+  const chargeableParts = spareParts?.filter((p) => p.coverageType === "OUT_OF_WARRANTY") ?? [];
+  const warrantyParts = spareParts?.filter((p) => p.coverageType === "WARRANTY") ?? [];
+  const hasSparePartsSection = (spareParts?.length ?? 0) > 0;
 
   return (
     <AppCard style={styles.card}>
@@ -119,62 +165,75 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
         </View>
       ) : null}
 
-      <View style={styles.row}>
-        <Text style={[styles.label, { color: theme.colors.textMuted }]}>Service Charge</Text>
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={[styles.value, { color: serviceChargeWaived ? theme.colors.success : theme.colors.text }]}>
-            {serviceChargeWaived ? "FREE" : fmt(serviceCharge)}
-          </Text>
-          {serviceChargeWaived ? (
-            <Text style={[styles.waivedTag, { color: theme.colors.success }]}>Covered by AMC</Text>
-          ) : null}
+      {/* ── Charge Rows ──────────────────────────────────────────────────────── */}
+
+      {/* Service Charge — show only if > 0 */}
+      {serviceCharge > 0 ? (
+        <View style={styles.row}>
+          <Text style={[styles.label, { color: theme.colors.textMuted }]}>Service Charge</Text>
+          <View style={{ alignItems: "flex-end" }}>
+            <Text style={[styles.value, { color: serviceChargeWaived ? theme.colors.success : theme.colors.text }]}>
+              {serviceChargeWaived ? "FREE" : fmt(serviceCharge)}
+            </Text>
+            {serviceChargeWaived ? (
+              <Text style={[styles.waivedTag, { color: theme.colors.success }]}>Covered by AMC</Text>
+            ) : null}
+          </View>
         </View>
-      </View>
+      ) : null}
 
-      <View style={styles.row}>
-        <Text style={[styles.label, { color: theme.colors.textMuted }]}>Labour Charge</Text>
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={[styles.value, { color: labourChargeWaived ? theme.colors.success : theme.colors.text }]}>
-            {labourChargeWaived ? "FREE" : fmt(labourCharge)}
-          </Text>
-          {labourChargeWaived ? (
-            <Text style={[styles.waivedTag, { color: theme.colors.success }]}>Covered by AMC</Text>
-          ) : null}
+      {/* Labour Charge — show only if > 0 */}
+      {(labourCharge !== undefined && labourCharge > 0) ? (
+        <View style={styles.row}>
+          <Text style={[styles.label, { color: theme.colors.textMuted }]}>Labour Charge</Text>
+          <View style={{ alignItems: "flex-end" }}>
+            <Text style={[styles.value, { color: labourChargeWaived ? theme.colors.success : theme.colors.text }]}>
+              {labourChargeWaived ? "FREE" : fmt(labourCharge)}
+            </Text>
+            {labourChargeWaived ? (
+              <Text style={[styles.waivedTag, { color: theme.colors.success }]}>Covered by AMC</Text>
+            ) : null}
+          </View>
         </View>
-      </View>
+      ) : null}
 
-      <View style={styles.row}>
-        <Text style={[styles.label, { color: theme.colors.textMuted }]}>Chargeable Spare Parts</Text>
-        <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(sparePartsAmount)}</Text>
-      </View>
+      {/* Chargeable Spare Parts total — show only when > 0 */}
+      {billableSpareParts > 0 ? (
+        <View style={styles.row}>
+          <Text style={[styles.label, { color: theme.colors.textMuted }]}>Chargeable Spare Parts</Text>
+          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(billableSpareParts)}</Text>
+        </View>
+      ) : null}
 
-      {additionalCharge ? (
+      {billableAdditional > 0 ? (
         <View style={styles.row}>
           <Text style={[styles.label, { color: theme.colors.textMuted }]}>Additional Charges</Text>
-          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(additionalCharge)}</Text>
+          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(billableAdditional)}</Text>
         </View>
       ) : null}
 
-      {discount ? (
+      {billableDiscount > 0 ? (
         <View style={styles.row}>
           <Text style={[styles.label, { color: theme.colors.success }]}>Discount</Text>
-          <Text style={[styles.value, { color: theme.colors.success }]}>-{fmt(discount)}</Text>
+          <Text style={[styles.value, { color: theme.colors.success }]}>-{fmt(billableDiscount)}</Text>
         </View>
       ) : null}
 
-      {subtotal !== undefined ? (
+      {/* Subtotal row — show only if > 0 */}
+      {displaySubtotal > 0 ? (
         <View style={styles.row}>
           <Text style={[styles.label, { color: theme.colors.textMuted }]}>Subtotal</Text>
-          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(subtotal)}</Text>
+          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(displaySubtotal)}</Text>
         </View>
       ) : null}
 
-      {gstAmount !== undefined && gstAmount > 0 ? (
+      {/* GST row — calculated ONLY on Service Charge; hidden if gstEnabled is false or Service Charge is 0/waived */}
+      {calculatedGstAmount > 0 ? (
         <View style={styles.row}>
           <Text style={[styles.label, { color: theme.colors.textMuted }]}>
             GST{gstPercent ? ` (${gstPercent}%)` : ""}
           </Text>
-          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(gstAmount)}</Text>
+          <Text style={[styles.value, { color: theme.colors.text }]}>{fmt(calculatedGstAmount)}</Text>
         </View>
       ) : null}
 
@@ -194,8 +253,87 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
 
       <View style={styles.row}>
         <Text style={[styles.grandLabel, { color: theme.colors.text }]}>Grand Total</Text>
-        <Text style={[styles.grandValue, { color: theme.colors.primary }]}>{fmt(grandTotal)}</Text>
+        <Text style={[styles.grandValue, { color: theme.colors.primary }]}>{fmt(displayGrandTotal)}</Text>
       </View>
+
+      {/* ── Spare Parts Breakdown ─────────────────────────────────────────────── */}
+      {hasSparePartsSection ? (
+        <View style={[styles.sparePartsSection, { borderColor: theme.colors.borderLight, backgroundColor: `${theme.colors.card}` }]}>
+          <View style={styles.sparePartsSectionHeader}>
+            <Package size={13} color={theme.colors.textMuted} />
+            <Text style={[styles.sparePartsSectionTitle, { color: theme.colors.textMuted }]}>SPARE PARTS BREAKDOWN</Text>
+          </View>
+
+          {/* Chargeable spare parts */}
+          {chargeableParts.length > 0 ? (
+            <View style={styles.spareGroupBlock}>
+              <View style={[styles.spareGroupLabel, { backgroundColor: `${theme.colors.danger}12` }]}>
+                <Text style={[styles.spareGroupLabelText, { color: theme.colors.danger }]}>
+                  Chargeable Parts
+                </Text>
+              </View>
+              {chargeableParts.map((part, idx) => {
+                const lineTotal = part.unitPrice * part.quantity;
+                return (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.spareRow,
+                      idx < chargeableParts.length - 1 ? { borderBottomWidth: 1, borderColor: theme.colors.borderLight } : undefined,
+                    ]}
+                  >
+                    <View style={styles.spareRowLeft}>
+                      <Text style={[styles.sparePrefix, { color: theme.colors.danger }]}>+</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.spareName, { color: theme.colors.text }]}>{part.name}</Text>
+                        <Text style={[styles.spareQty, { color: theme.colors.textMuted }]}>
+                          Qty {part.quantity} × {fmt(part.unitPrice)}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.spareAmount, { color: theme.colors.text }]}>{fmt(lineTotal)}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
+
+          {/* Warranty spare parts */}
+          {warrantyParts.length > 0 ? (
+            <View style={[styles.spareGroupBlock, chargeableParts.length > 0 ? { marginTop: 10 } : undefined]}>
+              <View style={[styles.spareGroupLabel, { backgroundColor: `${theme.colors.success}12` }]}>
+                <PackageCheck size={11} color={theme.colors.success} />
+                <Text style={[styles.spareGroupLabelText, { color: theme.colors.success }]}>
+                  Warranty Parts (Covered)
+                </Text>
+              </View>
+              {warrantyParts.map((part, idx) => {
+                const faceValue = part.unitPrice * part.quantity;
+                return (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.spareRow,
+                      idx < warrantyParts.length - 1 ? { borderBottomWidth: 1, borderColor: theme.colors.borderLight } : undefined,
+                    ]}
+                  >
+                    <View style={styles.spareRowLeft}>
+                      <Text style={[styles.sparePrefix, { color: theme.colors.success }]}>−</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.spareName, { color: theme.colors.text }]}>{part.name}</Text>
+                        <Text style={[styles.spareQty, { color: theme.colors.textMuted }]}>
+                          Qty {part.quantity} · Face value {fmt(faceValue)}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.spareAmount, { color: theme.colors.success }]}>FREE</Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
 
       {onViewInvoice ? (
         <AppButton
@@ -228,6 +366,81 @@ const styles = StyleSheet.create({
   divider: { height: 1, marginVertical: 8 },
   grandLabel: { fontSize: 14, fontWeight: "800" },
   grandValue: { fontSize: 19, fontWeight: "900" },
+
+  // ── Spare Parts Breakdown ───────────────────────────────────────────────
+  sparePartsSection: {
+    marginTop: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  sparePartsSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  sparePartsSectionTitle: {
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  spareGroupBlock: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  spareGroupLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    alignSelf: "flex-start",
+    marginBottom: 8,
+  },
+  spareGroupLabelText: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  spareRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 7,
+  },
+  spareRowLeft: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    flex: 1,
+    marginRight: 8,
+    gap: 6,
+  },
+  sparePrefix: {
+    fontSize: 15,
+    fontWeight: "800",
+    lineHeight: 18,
+    width: 12,
+    textAlign: "center",
+  },
+  spareName: {
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 17,
+  },
+  spareQty: {
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 1,
+  },
+  spareAmount: {
+    fontSize: 13,
+    fontWeight: "700",
+    minWidth: 50,
+    textAlign: "right",
+  },
 });
 
 export default PaymentSummaryCard;

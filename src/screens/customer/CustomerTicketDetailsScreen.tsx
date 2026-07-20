@@ -285,44 +285,21 @@ export const CustomerTicketDetailsScreen = () => {
         </>
         )}
 
-        {/* Payment Summary — only when the ticket has actually been invoiced */}
+        {/* Payment Summary — single unified component, only when the ticket has actually been invoiced */}
         {isClosed && ticket.invoice && (
           <>
-            <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>Payment Summary</Text>
-            <View style={[styles.premiumCard, { backgroundColor: theme.colors.card }]}>
-              <View style={styles.infoRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 11, color: theme.colors.textMuted, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.5 }}>Invoice Number</Text>
-                  <Text style={[styles.infoVal, { color: theme.colors.text, fontWeight: "700", marginTop: 2 }]}>{ticket.invoice.invoiceNumber}</Text>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={{ fontSize: 11, color: theme.colors.textMuted, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.5 }}>Invoice Date</Text>
-                  <Text style={[styles.infoVal, { color: theme.colors.text, fontWeight: "700", marginTop: 2 }]}>{formatDate(ticket.invoice.generatedAt)}</Text>
-                </View>
-              </View>
-              {ticket.payment && (
-                <View style={[styles.infoRow, { marginTop: 12 }]}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 11, color: theme.colors.textMuted, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.5 }}>Payment Method</Text>
-                    <Text style={[styles.infoVal, { color: theme.colors.text, fontWeight: "700", marginTop: 2 }]}>{ticket.payment.method}</Text>
-                  </View>
-                  <View style={{ alignItems: "flex-end" }}>
-                    <Text style={{ fontSize: 11, color: theme.colors.textMuted, textTransform: "uppercase", fontWeight: "700", letterSpacing: 0.5 }}>Payment Status</Text>
-                    <Text style={[styles.infoVal, { color: theme.colors.success, fontWeight: "700", marginTop: 2 }]}>{ticket.payment.status}</Text>
-                  </View>
-                </View>
-              )}
-            </View>
-
-            {/* warrantyPartsValue is never persisted on the Invoice/Payment records — only the
-                live technician preview / just-collected response have it — so it's correctly
-                omitted here rather than fabricated. */}
             <PaymentSummaryCard
+              invoiceNumber={ticket.invoice.invoiceNumber}
+              ticketNumber={ticket.ticketNumber}
+              invoiceDate={formatDate(ticket.invoice.generatedAt)}
+              paymentMode={ticket.payment?.method}
+              paymentStatus={ticket.payment?.status}
               serviceCharge={ticket.invoice.serviceCharge}
               serviceChargeWaived={ticket.payment?.serviceChargeWaived}
               labourCharge={ticket.invoice.labourCharge}
               labourChargeWaived={ticket.payment?.labourChargeWaived}
               sparePartsAmount={ticket.invoice.sparePartsAmount}
+              warrantyPartsValue={(ticket.invoice as any)?.warrantyPartsValue ?? (ticket.payment as any)?.warrantyPartsValue}
               additionalCharge={ticket.invoice.additionalCharge}
               discount={ticket.invoice.discount}
               subtotal={ticket.invoice.subtotal}

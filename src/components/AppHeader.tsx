@@ -95,13 +95,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       style={[
         styles.container,
         {
-          paddingTop: insets.top + (Platform.OS === "ios" ? 8 : 12),
+          paddingTop: insets.top + (Platform.OS === "ios" ? 6 : 10),
           backgroundColor: theme.colors.card,
-          shadowColor: "rgba(15,23,42,0.08)",
-          shadowOffset: { width: 0, height: 2 },
+          shadowColor: "rgba(15,23,42,0.06)",
+          shadowOffset: { width: 0, height: 4 },
           shadowOpacity: 1,
-          shadowRadius: 6,
+          shadowRadius: 12,
           elevation: 4,
+          borderBottomWidth: 1,
+          borderBottomColor: `${theme.colors.borderLight}90`,
           zIndex: 10,
         },
       ]}
@@ -114,15 +116,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             onPress={resolvedOnBackPress}
             style={({ pressed }) => [
               styles.backButton,
-              pressed && { opacity: 0.7 },
+              { backgroundColor: `${theme.colors.primary}0d` },
+              pressed && { opacity: 0.7, transform: [{ scale: 0.96 }] },
             ]}
           >
-            <ArrowLeft color={theme.colors.text} size={24} />
+            <ArrowLeft color={theme.colors.text} size={22} />
           </Pressable>
         ) : showTenantBranding && (APP_CONFIG as any).logo ? (
           <Image
             source={{ uri: (APP_CONFIG as any).logo }}
-            style={[styles.logo, { borderColor: theme.colors.borderLight }]}
+            style={[styles.logo, { borderColor: `${theme.colors.primary}20` }]}
           />
         ) : showTenantBranding ? (
           <View style={[styles.initialsLogo, { backgroundColor: theme.colors.primary }]}>
@@ -142,25 +145,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   styles.tenantTitle,
                   {
                     color: theme.colors.text,
-                    fontSize: theme.typography.fontSize.md,
-                    fontWeight: theme.typography.fontWeight.bold,
+                    fontSize: 20,
+                    fontWeight: "800",
                   },
                 ]}
                 numberOfLines={1}
               >
                 {APP_CONFIG.appName}
               </Text>
-              <Text
-                style={[
-                  styles.tenantSubtitle,
-                  {
-                    color: theme.colors.textMuted,
-                    fontSize: theme.typography.fontSize.xs,
-                  },
-                ]}
-              >
-                Portal
-              </Text>
+              <View style={[styles.portalBadge, { backgroundColor: `${theme.colors.primary}15` }]}>
+                <Text style={[styles.tenantSubtitle, { color: theme.colors.primary }]}>
+                  PORTAL
+                </Text>
+              </View>
             </>
           ) : (
             <>
@@ -206,7 +203,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: 12,
+    paddingBottom: 14,
     paddingHorizontal: 16,
   },
   contentRow: {
@@ -215,13 +212,17 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   backButton: {
-    padding: 4,
-    marginRight: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 6,
   },
   logo: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     borderWidth: 1.5,
     marginRight: 10,
   },
@@ -231,7 +232,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   title: {
-    letterSpacing: -0.2,
+    letterSpacing: -0.3,
     textAlign: "center",
   },
   subtitle: {
@@ -239,12 +240,20 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   tenantTitle: {
-    letterSpacing: -0.2,
+    letterSpacing: -0.5,
     textAlign: "center",
   },
+  portalBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginTop: 2,
+    alignSelf: "center",
+  },
   tenantSubtitle: {
-    marginTop: 1,
-    letterSpacing: 0.2,
+    fontSize: 9.5,
+    fontWeight: "700",
+    letterSpacing: 1.6,
     textTransform: "uppercase",
     textAlign: "center",
   },
@@ -257,15 +266,16 @@ const styles = StyleSheet.create({
     width: 40,
   },
   initialsLogo: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+    marginRight: 10,
   },
   initialsText: {
     color: "#ffffff",
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: "800",
     letterSpacing: 0.5,
   },
@@ -280,8 +290,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   bellButton: {
-    padding: 6,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     position: "relative",
+    alignItems: "center",
+    justifyContent: "center",
   },
   notifBadge: {
     position: "absolute",

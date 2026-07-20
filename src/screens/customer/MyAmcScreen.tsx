@@ -226,7 +226,9 @@ export const MyAmcScreen = () => {
             ]}
             onPress={() => navigation.navigate("AmcDetails", { subscriptionId: item.id })}
           >
-            <Text style={[styles.detailsBtnText, { color: theme.colors.primary }]}>View Details</Text>
+            <Text style={[styles.detailsBtnText, { color: theme.colors.primary }]}>
+              {item.status === "ACTIVE" || item.status === "RENEWED" ? "View Covered Equipment" : "View Details"}
+            </Text>
             <ChevronRight size={14} color={theme.colors.primary} />
           </Pressable>
         </View>

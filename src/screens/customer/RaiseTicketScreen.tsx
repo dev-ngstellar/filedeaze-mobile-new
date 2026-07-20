@@ -13,6 +13,7 @@ import {
   Platform,
   Alert,
   useWindowDimensions,
+  ActivityIndicator,
 } from "react-native";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -57,6 +58,7 @@ import {
   useCustomerAssets,
 } from "../../hooks/useCustomer";
 import { Address, CustomerAsset } from "../../services/customer.service";
+import { useActiveAmcSubscriptionForAsset } from "../../hooks/useAmc";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
 import { AppButton } from "../../components/AppButton";
@@ -174,9 +176,11 @@ export const RaiseTicketScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProp<CustomerStackParamList, "RaiseTicket">>();
-  const { categoryId, categoryName, assetId, assetName } = route.params || {};
+  const { categoryId, categoryName, assetId, assetName, contractId, fromAMC, bookingMode: initialBookingMode } = (route.params || {}) as any;
   const isCategoryLocked = !!categoryId;
   const isAssetLocked = !!assetId;
+  const bookingMode = initialBookingMode || (fromAMC || assetId ? "AMC" : "NORMAL");
+  const isAmcBooking = bookingMode === "AMC" || !!fromAMC;
 
   const { width: windowWidth } = useWindowDimensions();
   const isLargeScreen = windowWidth >= 550;
@@ -188,26 +192,32 @@ export const RaiseTicketScreen = () => {
 
   // Asset selection & AMC service-type states
   const [selectedAsset, setSelectedAsset] = useState<CustomerAsset | null>(null);
+  const { data: activeSub } = useActiveAmcSubscriptionForAsset(selectedAsset?.hasActiveAmc ? selectedAsset.id : "");
   const [assetDropdownVisible, setAssetDropdownVisible] = useState(false);
   const [isAmcRequest, setIsAmcRequest] = useState(false);
   const [amcModalVisible, setAmcModalVisible] = useState(false);
   const amcPromptedForAssetId = useRef<string | null>(null);
 
-  // Pre-select the asset passed in via navigation params once the assets list loads
+  // Pre-select the asset & category passed in via navigation params once assets/categories list loads (AMC mode only)
   useEffect(() => {
-    if (assetId && assets.length > 0 && selectedAsset?.id !== assetId) {
-      const found = assets.find((a) => a.id === assetId);
-      if (found) setSelectedAsset(found);
-    }
-  }, [assetId, assets]);
-
-  // Whenever an AMC-eligible asset becomes selected, ask the customer how this request should be billed
-  useEffect(() => {
-    if (!selectedAsset) {
+    if (!isAmcBooking) {
+      setSelectedAsset(null);
       setIsAmcRequest(false);
       return;
     }
-    if (!selectedAsset.hasActiveAmc) {
+    setIsAmcRequest(true);
+    if (assetId && assets.length > 0 && selectedAsset?.id !== assetId) {
+      const found = assets.find((a) => a.id === assetId);
+      if (found) {
+        setSelectedAsset(found);
+      }
+    }
+  }, [isAmcBooking, assetId, assets]);
+
+  // Whenever a non-AMC asset becomes selected, update isAmcRequest
+  useEffect(() => {
+    if (isAmcBooking || fromAMC) return;
+    if (!selectedAsset || !selectedAsset.hasActiveAmc) {
       setIsAmcRequest(false);
       return;
     }
@@ -215,7 +225,7 @@ export const RaiseTicketScreen = () => {
       amcPromptedForAssetId.current = selectedAsset.id;
       setAmcModalVisible(true);
     }
-  }, [selectedAsset]);
+  }, [selectedAsset, isAmcBooking, fromAMC]);
 
   // Address Book API hooks
   const { data: addresses = [], isLoading: isLoadingAddresses, refetch: refetchAddresses } = useCustomerAddresses();
@@ -230,9 +240,12 @@ export const RaiseTicketScreen = () => {
   const [description, setDescription] = useState("");
   const [preferredDate, setPreferredDate] = useState<Date | null>(null);
   const [preferredTimeSlot, setPreferredTimeSlot] = useState("");
+  const [visitType, setVisitType] = useState<"IMMEDIATE" | "SCHEDULED">("IMMEDIATE");
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
   const [images, setImages] = useState<{ uri: string; type: "image" | "video" }[]>([]);
   const [imageNotes, setImageNotes] = useState("");
+
+
 
   // Address modal states
   const [addressBookVisible, setAddressBookVisible] = useState(false);
@@ -278,7 +291,7 @@ export const RaiseTicketScreen = () => {
         postalCode: profile.pincode || "",
         isActive: true,
       };
-      
+
       if (!selectedAddress || selectedAddress.id === "profile") {
         setSelectedAddress(profileAddr);
       }
@@ -292,7 +305,6 @@ export const RaiseTicketScreen = () => {
     ? catDetails
     : (catDetails?.subCategories || catDetails?.services || []);
 
-  // Dropdown UI states
   const [catModalVisible, setCatModalVisible] = useState(false);
   const [subModalVisible, setSubModalVisible] = useState(false);
   const subFieldRef = React.useRef<View>(null);
@@ -396,6 +408,18 @@ export const RaiseTicketScreen = () => {
     return formatDateKey(date) > todayKey;
   };
 
+  // Auto-set today's date when IMMEDIATE is selected; clear date when switching to SCHEDULED
+  React.useEffect(() => {
+    if (visitType === "IMMEDIATE") {
+      setPreferredDate(new Date());
+      setPreferredTimeSlot("IMMEDIATE");
+    } else {
+      // Clear so user must pick a future date
+      setPreferredDate(null);
+      setPreferredTimeSlot("");
+    }
+  }, [visitType]);
+
   const handleOpenScheduleFlow = () => {
     setSubModalVisible(false);
     setTempDate(preferredDate);
@@ -478,16 +502,22 @@ export const RaiseTicketScreen = () => {
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    if (!selectedCat) newErrors.category = "Category is required";
-    if (!selectedSub) newErrors.subCategory = "Sub Category is required";
+    if (!isAmcBooking) {
+      if (!selectedCat) newErrors.category = "Category is required";
+      if (!selectedSub) newErrors.subCategory = "Sub Category is required";
+    }
     if (!description.trim()) newErrors.description = "Description is required";
-    if (!preferredDate || !preferredTimeSlot) {
-      newErrors.preferredDate = "Visit Date and Time slot are required";
-    } else {
-      if (!isDateAllowed(preferredDate)) {
-        newErrors.preferredDate = "Bookings can only be scheduled from tomorrow onwards.";
+    // Date validation only applies to SCHEDULED visits
+    if (visitType === "SCHEDULED") {
+      if (!preferredDate || !preferredTimeSlot) {
+        newErrors.preferredDate = "Visit Date and Time slot are required";
+      } else {
+        if (!isDateAllowed(preferredDate)) {
+          newErrors.preferredDate = "Bookings can only be scheduled from tomorrow onwards.";
+        }
       }
     }
+    // For IMMEDIATE, visitDate is always today — no user validation needed
     if (!selectedAddress) newErrors.address = "Address is required";
     if (images.length === 0) newErrors.images = "At least 1 photo or video is required";
     return newErrors;
@@ -662,6 +692,14 @@ export const RaiseTicketScreen = () => {
     // Guard: prevent double-tap from sending a second request
     if (raiseTicketMutation.isPending) return;
 
+    if (!isAmcBooking && (!selectedCat || !selectedSub)) {
+      Alert.alert(
+        "Service Category",
+        "Unable to determine the service category. Please try again."
+      );
+      return;
+    }
+
     setSubmitAttempted(true);
     const newErrors = validate();
     setErrors(newErrors);
@@ -671,12 +709,31 @@ export const RaiseTicketScreen = () => {
       return;
     }
 
+    const resolvedContractId = contractId || activeSub?.id;
+
+    // Debug logs
+    console.log({
+      isAmcBooking,
+      categoriesLoaded: !isLoadingCats,
+      categoriesCount: categories.length,
+      selectedCat,
+      selectedSub,
+      selectedAsset,
+      resolvedContractId
+    });
+
     try {
       const formData = new FormData();
 
       // ── Required fields ──────────────────────────────────────────
-      formData.append("categoryId", selectedCat.id);
-      formData.append("subCategoryId", selectedSub.id);
+      if (!isAmcBooking) {
+        if (selectedCat) {
+          formData.append("categoryId", selectedCat.id);
+        }
+        if (selectedSub) {
+          formData.append("subCategoryId", selectedSub.id);
+        }
+      }
       formData.append("description", imageNotes
         ? `${description}\n\nImage Notes: ${imageNotes}`
         : description);
@@ -697,11 +754,18 @@ export const RaiseTicketScreen = () => {
       // ── Optional: asset + AMC service type ────────────────────────
       if (selectedAsset) {
         formData.append("customerAssetId", selectedAsset.id);
-        formData.append("isAmcRequest", selectedAsset.hasActiveAmc && isAmcRequest ? "true" : "false");
+        const isAmc = isAmcBooking || (selectedAsset.hasActiveAmc && isAmcRequest);
+        formData.append("isAmcRequest", isAmc ? "true" : "false");
       }
 
-      // ── Optional: scheduled date/time ────────────────────────────
-      if (preferredDate && preferredTimeSlot) {
+      // ── Scheduled date/time ─────────────────────────────────────
+      // visitType and visitDate are UI-only — backend only accepts scheduledAt.
+      // For IMMEDIATE: send current ISO timestamp. For SCHEDULED: send chosen date+time.
+      if (visitType === "IMMEDIATE") {
+        // Immediate = right now. Backend defaults scheduledAt to new Date() when omitted,
+        // but we send it explicitly for clarity and audit trail.
+        formData.append("scheduledAt", new Date().toISOString());
+      } else if (preferredDate && preferredTimeSlot) {
         const scheduledTime = new Date(preferredDate);
         const [timePart] = preferredTimeSlot.split(" - ");
         const [hhmm, ampm] = timePart.split(" ");
@@ -781,11 +845,12 @@ export const RaiseTicketScreen = () => {
   };
 
   const isFormIncomplete =
-    !selectedCat ||
-    !selectedSub ||
+    (isAmcBooking
+      ? (!selectedAsset)
+      : (!selectedCat || !selectedSub)
+    ) ||
     !description.trim() ||
-    !preferredDate ||
-    !preferredTimeSlot ||
+    (visitType === "SCHEDULED" && (!preferredDate || !preferredTimeSlot)) ||
     !selectedAddress ||
     images.length === 0;
 
@@ -799,66 +864,238 @@ export const RaiseTicketScreen = () => {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Card 1: Service Category Details */}
         <AppCard style={styles.card}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 10, marginBottom: 18 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 10, marginBottom: 14 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 1 }}>
               <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
                 <Text style={styles.stepBadgeText}>1</Text>
               </View>
               <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]} numberOfLines={1}>Service Information</Text>
             </View>
-            <Pressable
-              onPress={handleOpenScheduleFlow}
-              style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }}
-            >
-              <CalendarIcon size={18} color={theme.colors.primary} />
-              <Text style={{ fontSize: 13, fontWeight: "600", color: preferredDate && preferredTimeSlot ? theme.colors.text : theme.colors.textMuted }}>
-                {preferredDate && preferredTimeSlot
-                  ? `${preferredDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" })} • ${preferredTimeSlot}`
-                  : "Set Visit"}
-              </Text>
-            </Pressable>
           </View>
 
-          {submitAttempted && errors.preferredDate ? (
-            <Text style={[styles.errorText, { color: theme.colors.danger, marginTop: -8, marginBottom: 12, marginLeft: 32 }]}>
-              {errors.preferredDate}
-            </Text>
-          ) : null}
-
-          {/* Asset (optional) */}
-          <View style={styles.fieldWrapper}>
-            <View style={styles.labelRow}>
-              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Asset</Text>
-              <Text style={{ color: theme.colors.textMuted, fontSize: 10, fontWeight: "500", marginLeft: 4 }}>(Optional)</Text>
+          {/* ── Visit Type Segmented Control ──────────────────── */}
+          <View style={{ marginBottom: 16 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, flex: 1 }]}>When do you need the service?</Text>
+              <Text style={{ color: theme.colors.danger, fontWeight: "bold", fontSize: 13 }}>*</Text>
             </View>
-            <Pressable
-              style={[
-                styles.dropdownBtn,
-                {
-                  backgroundColor: isAssetLocked ? `${theme.colors.primary}08` : theme.colors.background,
-                  borderColor: isAssetLocked ? `${theme.colors.primary}30` : theme.colors.borderLight,
+
+            {/* Pill strip container */}
+            <View style={{
+              flexDirection: "row",
+              backgroundColor: theme.colors.background,
+              borderRadius: 14,
+              borderWidth: 1.5,
+              borderColor: theme.colors.borderLight,
+              padding: 4,
+              gap: 4,
+            }}>
+              {/* Immediate pill */}
+              <Pressable
+                onPress={() => setVisitType("IMMEDIATE")}
+                style={[{
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  paddingVertical: 10,
+                  borderRadius: 10,
                 },
-              ]}
-              disabled={isAssetLocked || isLoadingAssets}
-              onPress={() => setAssetDropdownVisible(true)}
-            >
-              <View style={styles.dropdownValueWrapper}>
-                <Text style={[styles.dropdownText, { color: selectedAsset ? theme.colors.text : theme.colors.textLight }]}>
-                  {selectedAsset ? selectedAsset.name : assetName ?? "Select a registered asset..."}
+                visitType === "IMMEDIATE"
+                  ? { backgroundColor: theme.colors.primary }
+                  : { backgroundColor: "transparent" },
+                ]}
+              >
+                <Zap
+                  size={15}
+                  color={visitType === "IMMEDIATE" ? "#fff" : theme.colors.textMuted}
+                  fill={visitType === "IMMEDIATE" ? "#fff" : "none"}
+                />
+                <Text style={{
+                  fontSize: 13,
+                  fontWeight: "700",
+                  color: visitType === "IMMEDIATE" ? "#fff" : theme.colors.textMuted,
+                }}>
+                  Immediate
+                </Text>
+              </Pressable>
+
+              {/* Scheduled pill */}
+              <Pressable
+                onPress={() => setVisitType("SCHEDULED")}
+                style={[{
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                },
+                visitType === "SCHEDULED"
+                  ? { backgroundColor: theme.colors.primary }
+                  : { backgroundColor: "transparent" },
+                ]}
+              >
+                <CalendarIcon
+                  size={14}
+                  color={visitType === "SCHEDULED" ? "#fff" : theme.colors.textMuted}
+                />
+                <Text style={{
+                  fontSize: 13,
+                  fontWeight: "700",
+                  color: visitType === "SCHEDULED" ? "#fff" : theme.colors.textMuted,
+                }}>
+                  Scheduled
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+
+          {/* Immediate — compact date row */}
+          {visitType === "IMMEDIATE" && (
+            <View style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+              backgroundColor: `${theme.colors.primary}0a`,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: `${theme.colors.primary}20`,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              marginBottom: 18,
+            }}>
+              <Clock size={18} color={theme.colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>
+                  {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                </Text>
+                <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 1 }}>
+                  Technician dispatched for today
                 </Text>
               </View>
-              {!isAssetLocked && <ChevronDown size={18} color={theme.colors.textMuted} />}
-            </Pressable>
-
-            {selectedAsset?.hasActiveAmc ? (
-              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8, gap: 8 }}>
-                <AMCBadge label={isAmcRequest ? "AMC Service" : "Normal Service"} active={isAmcRequest} />
-                <Pressable onPress={() => setAmcModalVisible(true)}>
-                  <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>Change</Text>
-                </Pressable>
+              <View style={{
+                backgroundColor: "#22C55E14",
+                borderRadius: 20,
+                paddingHorizontal: 8,
+                paddingVertical: 3,
+                borderWidth: 1,
+                borderColor: "#22C55E40",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+              }}>
+                <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#22C55E" }} />
+                <Text style={{ fontSize: 9.5, fontWeight: "800", color: "#22C55E", letterSpacing: 0.4 }}>TODAY</Text>
               </View>
-            ) : null}
-          </View>
+            </View>
+          )}
+
+          {/* Scheduled — date/time picker row */}
+          {visitType === "SCHEDULED" && (
+            <View style={{ marginBottom: 18 }}>
+              <Pressable
+                onPress={handleOpenScheduleFlow}
+                style={({ pressed }) => [
+                  {
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    paddingHorizontal: 14,
+                    paddingVertical: 13,
+                    backgroundColor: theme.colors.background,
+                    borderColor: preferredDate && preferredTimeSlot
+                      ? theme.colors.primary
+                      : theme.colors.borderLight,
+                  },
+                  pressed && { opacity: 0.82 },
+                ]}
+              >
+                <CalendarIcon
+                  size={18}
+                  color={preferredDate && preferredTimeSlot ? theme.colors.primary : theme.colors.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  {preferredDate && preferredTimeSlot ? (
+                    <>
+                      <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>
+                        {preferredDate.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}
+                      </Text>
+                      <Text style={{ fontSize: 11.5, color: theme.colors.primary, marginTop: 2, fontWeight: "600" }}>
+                        {preferredTimeSlot}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={{ fontSize: 13, fontWeight: "600", color: theme.colors.textMuted }}>
+                      Select date &amp; time slot
+                    </Text>
+                  )}
+                </View>
+                <ChevronRight size={16} color={theme.colors.textMuted} />
+              </Pressable>
+              {submitAttempted && errors.preferredDate ? (
+                <Text style={[styles.errorText, { color: theme.colors.danger, marginTop: 6 }]}>{errors.preferredDate}</Text>
+              ) : null}
+            </View>
+          )}
+
+
+
+
+
+          {isAmcBooking && (
+            <View style={styles.fieldWrapper}>
+              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Selected Asset & AMC Coverage</Text>
+              <View
+                style={{
+                  backgroundColor: `${theme.colors.primary}08`,
+                  borderWidth: 1.5,
+                  borderColor: `${theme.colors.primary}30`,
+                  borderRadius: 14,
+                  padding: 14,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ fontSize: 15, fontWeight: "800", color: theme.colors.text }}>
+                      {selectedAsset?.name || assetName || "Covered Equipment"}
+                    </Text>
+                    {selectedAsset?.brand || selectedAsset?.model ? (
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                        {[selectedAsset?.brand, selectedAsset?.model].filter(Boolean).join(" · ")}
+                      </Text>
+                    ) : (
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>Registered AMC Asset</Text>
+                    )}
+                  </View>
+                  <AMCBadge label="AMC Active" active />
+                </View>
+
+                {/* AMC Plan Details Breakdown */}
+                {activeSub && (
+                  <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: `${theme.colors.primary}20`, gap: 4 }}>
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>
+                      Plan: {activeSub.plan?.name || (activeSub as any).planName || "Active AMC Contract"}
+                    </Text>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
+                      <Text style={{ fontSize: 11, color: theme.colors.textMuted, fontWeight: "600" }}>
+                        Visits Remaining: {activeSub.remainingVisits ?? "—"} / {activeSub.contractTotalVisits ?? activeSub.plan?.visitCount ?? (activeSub as any).totalVisits ?? "—"}
+                      </Text>
+                      {activeSub.endDate && (
+                        <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>
+                          Expires: {new Date(activeSub.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
 
           {/* Asset Picker Modal */}
           <Modal
@@ -946,248 +1183,249 @@ export const RaiseTicketScreen = () => {
             }}
           />
 
-          {/* Category */}
-          <View style={styles.fieldWrapper}>
-            <View style={styles.labelRow}>
-              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Category</Text>
-              <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-            </View>
-            <Pressable
-              style={[
-                styles.dropdownBtn,
-                {
-                  backgroundColor: isCategoryLocked ? `${theme.colors.primary}08` : theme.colors.background,
-                  borderColor: isCategoryLocked ? `${theme.colors.primary}30` : theme.colors.borderLight
-                }
-              ]}
-              disabled={isCategoryLocked}
-              onPress={() => {
-                setSubModalVisible(false);
-                setCatModalVisible(true);
-              }}
-            >
-              <View style={styles.dropdownValueWrapper}>
-                {selectedCat && (
-                  <View style={styles.iconCircle}>
-                    {getCategoryIcon(selectedCat.name)}
-                  </View>
-                )}
-                <Text style={[styles.dropdownText, { color: selectedCat ? theme.colors.text : theme.colors.textLight }]}>
-                  {selectedCat ? selectedCat.name : "Select category..."}
-                </Text>
-              </View>
-              {!isCategoryLocked && (
-                <ChevronDown size={18} color={theme.colors.textMuted} />
-              )}
-            </Pressable>
-            {isCategoryLocked && (
-              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6, marginLeft: 2, gap: 4 }}>
-
-              </View>
-            )}
-            {submitAttempted && errors.category ? (
-              <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.category}</Text>
-            ) : null}
-          </View>
-
-          <View style={[styles.fieldWrapper, { zIndex: 1000 }]}>
-            <View style={styles.labelRow}>
-              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Sub Category</Text>
-              <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-            </View>
-            <View style={{ position: "relative", zIndex: 1000 }}>
-              <Pressable
-                style={[
-                  styles.dropdownBtn,
-                  { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight },
-                  !selectedCat && { opacity: 0.5 },
-                  subModalVisible && {
-                    borderBottomLeftRadius: 0,
-                    borderBottomRightRadius: 0,
-                    borderBottomWidth: 0,
-                  }
-                ]}
-                onPress={() => {
-                  if (!selectedCat) {
-                    triggerPopup("info", "Select Category", "Please select a main category first.");
-                    return;
-                  }
-                  setSubModalVisible(!subModalVisible);
-                }}
-              >
-                <Text style={[styles.dropdownText, { color: selectedSub ? theme.colors.text : theme.colors.textLight }]}>
-                  {selectedSub ? selectedSub.name : "Select repair service detail..."}
-                </Text>
-                <ChevronDown size={18} color={theme.colors.textMuted} />
-              </Pressable>
-
-              {/* Sub Category Picker Dropdown Overlay */}
-              {subModalVisible && (
-                <View
-                  style={{
-                    position: "relative",
-                    backgroundColor: theme.colors.card,
-                    borderColor: theme.colors.borderLight,
-                    borderWidth: 1.5,
-                    borderTopWidth: 1,
-                    borderTopLeftRadius: 0,
-                    borderTopRightRadius: 0,
-                    borderBottomLeftRadius: 16,
-                    borderBottomRightRadius: 16,
-                    maxHeight: 300,
-                    padding: 10,
-                    overflow: "hidden",
-                    width: "100%",
-                    marginTop: -1,
+          {/* Category & Sub Category Selection (Hidden for AMC Mode) */}
+          {!isAmcBooking && (
+            <>
+              {/* Category */}
+              <View style={styles.fieldWrapper}>
+                <View style={styles.labelRow}>
+                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Category</Text>
+                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
+                </View>
+                <Pressable
+                  style={[
+                    styles.dropdownBtn,
+                    {
+                      backgroundColor: isCategoryLocked ? `${theme.colors.primary}08` : theme.colors.background,
+                      borderColor: isCategoryLocked ? `${theme.colors.primary}30` : theme.colors.borderLight
+                    }
+                  ]}
+                  disabled={isCategoryLocked}
+                  onPress={() => {
+                    setSubModalVisible(false);
+                    setCatModalVisible(true);
                   }}
                 >
-                  <View style={[styles.pickerSearchBar, { backgroundColor: `${theme.colors.textMuted}08`, borderColor: theme.colors.borderLight, marginHorizontal: 0, marginBottom: 8, height: 40 }]}>
-                    <Wrench size={14} color={theme.colors.textMuted} />
-                    <TextInput
-                      style={[styles.pickerSearchInput, { color: theme.colors.text, fontSize: 13 }]}
-                      placeholder="Search services..."
-                      placeholderTextColor={theme.colors.textMuted}
-                      value={subSearch}
-                      onChangeText={setSubSearch}
-                      autoCorrect={false}
-                    />
-                    {subSearch.length > 0 && (
-                      <Pressable onPress={() => setSubSearch("")}>
-                        <X size={14} color={theme.colors.textMuted} />
-                      </Pressable>
+                  <View style={styles.dropdownValueWrapper}>
+                    {selectedCat && (
+                      <View style={styles.iconCircle}>
+                        {getCategoryIcon(selectedCat.name)}
+                      </View>
                     )}
+                    <Text style={[styles.dropdownText, { color: selectedCat ? theme.colors.text : theme.colors.textLight }]}>
+                      {selectedCat ? selectedCat.name : "Select category..."}
+                    </Text>
                   </View>
+                  {!isCategoryLocked && (
+                    <ChevronDown size={18} color={theme.colors.textMuted} />
+                  )}
+                </Pressable>
+                {submitAttempted && errors.category ? (
+                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.category}</Text>
+                ) : null}
+              </View>
 
-                  {isLoadingSubs ? (
-                    <AppLoader message="Retrieving service details..." />
-                  ) : (
-                    <ScrollView
-                      showsVerticalScrollIndicator={true}
-                      keyboardShouldPersistTaps="handled"
-                      style={{ maxHeight: 220 }}
-                      nestedScrollEnabled={true}
+              {/* Sub Category */}
+              <View style={[styles.fieldWrapper, { zIndex: 1000 }]}>
+                <View style={styles.labelRow}>
+                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Sub Category</Text>
+                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
+                </View>
+                <View style={{ position: "relative", zIndex: 1000 }}>
+                  <Pressable
+                    style={[
+                      styles.dropdownBtn,
+                      { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight },
+                      !selectedCat && { opacity: 0.5 },
+                      subModalVisible && {
+                        borderBottomLeftRadius: 0,
+                        borderBottomRightRadius: 0,
+                        borderBottomWidth: 0,
+                      }
+                    ]}
+                    onPress={() => {
+                      if (!selectedCat) {
+                        triggerPopup("info", "Select Category", "Please select a main category first.");
+                        return;
+                      }
+                      setSubModalVisible(!subModalVisible);
+                    }}
+                  >
+                    <Text style={[styles.dropdownText, { color: selectedSub ? theme.colors.text : theme.colors.textLight }]}>
+                      {selectedSub ? selectedSub.name : "Select repair service detail..."}
+                    </Text>
+                    <ChevronDown size={18} color={theme.colors.textMuted} />
+                  </Pressable>
+
+                  {/* Sub Category Picker Dropdown Overlay */}
+                  {subModalVisible && (
+                    <View
+                      style={{
+                        position: "relative",
+                        backgroundColor: theme.colors.card,
+                        borderColor: theme.colors.borderLight,
+                        borderWidth: 1.5,
+                        borderTopWidth: 1,
+                        borderTopLeftRadius: 0,
+                        borderTopRightRadius: 0,
+                        borderBottomLeftRadius: 16,
+                        borderBottomRightRadius: 16,
+                        maxHeight: 300,
+                        padding: 10,
+                        overflow: "hidden",
+                        width: "100%",
+                        marginTop: -1,
+                      }}
                     >
-                      {(() => {
-                        const filtered = subCategories.filter((s: any) =>
-                          s.name.toLowerCase().includes(subSearch.toLowerCase())
-                        );
-                        if (filtered.length === 0) {
-                          return (
-                            <View style={{ alignItems: "center", paddingVertical: 20 }}>
-                              <Text style={{ color: theme.colors.textMuted, fontSize: 12 }}>No services found</Text>
-                            </View>
-                          );
-                        }
-                        return filtered.map((item: any, index: number) => {
-                          const isActive = selectedSub?.id === item.id;
-                          return (
-                            <Pressable
-                              key={item.id}
-                              style={[
-                                styles.subListItem,
-                                {
-                                  backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background,
-                                  marginVertical: 3,
-                                  padding: 10,
-                                  minHeight: 54,
-                                },
-                                isActive
-                                  ? { borderColor: theme.colors.primary, borderWidth: 1.5 }
-                                  : { borderColor: theme.colors.borderLight, borderWidth: 1 },
-                              ]}
-                              onPress={() => {
-                                setSelectedSub(item);
-                                setSubModalVisible(false);
-                                setSubSearch("");
-                                if (errors.subCategory) setErrors((prev) => ({ ...prev, subCategory: "" }));
-                              }}
-                            >
-                              <View style={[styles.subItemNumBadge, { backgroundColor: isActive ? theme.colors.primary : `${theme.colors.textMuted}10`, width: 22, height: 22, borderRadius: 11 }]}>
-                                <Text style={[styles.subItemNumText, { color: isActive ? "#fff" : theme.colors.textMuted, fontSize: 10 }]}>
-                                  {String(index + 1).padStart(2, "0")}
-                                </Text>
-                              </View>
+                      <View style={[styles.pickerSearchBar, { backgroundColor: `${theme.colors.textMuted}08`, borderColor: theme.colors.borderLight, marginHorizontal: 0, marginBottom: 8, height: 40 }]}>
+                        <Wrench size={14} color={theme.colors.textMuted} />
+                        <TextInput
+                          style={[styles.pickerSearchInput, { color: theme.colors.text, fontSize: 13 }]}
+                          placeholder="Search services..."
+                          placeholderTextColor={theme.colors.textMuted}
+                          value={subSearch}
+                          onChangeText={setSubSearch}
+                          autoCorrect={false}
+                        />
+                        {subSearch.length > 0 && (
+                          <Pressable onPress={() => setSubSearch("")}>
+                            <X size={14} color={theme.colors.textMuted} />
+                          </Pressable>
+                        )}
+                      </View>
 
-                              <View style={{ flex: 1, marginLeft: 8 }}>
-                                <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text, fontSize: 12 }]}>
-                                  {item.name}
-                                </Text>
-                                {item.serviceCharges?.length > 0 && (
-                                  <Text style={[styles.subItemCharge, { color: theme.colors.textMuted, fontSize: 10 }]}>
-                                    ₹{item.serviceCharges[0].amount} base charge
-                                  </Text>
-                                )}
-                              </View>
-
-                              {isActive && (
-                                <View style={[styles.subItemCheckCircle, { backgroundColor: theme.colors.primary, width: 18, height: 18, borderRadius: 9 }]}>
-                                  <Check size={10} color="#fff" />
+                      {isLoadingSubs ? (
+                        <AppLoader message="Retrieving service details..." />
+                      ) : (
+                        <ScrollView
+                          showsVerticalScrollIndicator={true}
+                          keyboardShouldPersistTaps="handled"
+                          style={{ maxHeight: 220 }}
+                          nestedScrollEnabled={true}
+                        >
+                          {(() => {
+                            const filtered = subCategories.filter((s: any) =>
+                              s.name.toLowerCase().includes(subSearch.toLowerCase())
+                            );
+                            if (filtered.length === 0) {
+                              return (
+                                <View style={{ alignItems: "center", paddingVertical: 20 }}>
+                                  <Text style={{ color: theme.colors.textMuted, fontSize: 12 }}>No services found</Text>
                                 </View>
-                              )}
-                            </Pressable>
-                          );
-                        });
-                      })()}
-                    </ScrollView>
+                              );
+                            }
+                            return filtered.map((item: any, index: number) => {
+                              const isActive = selectedSub?.id === item.id;
+                              return (
+                                <Pressable
+                                  key={item.id}
+                                  style={[
+                                    styles.subListItem,
+                                    {
+                                      backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background,
+                                      marginVertical: 3,
+                                      padding: 10,
+                                      minHeight: 54,
+                                    },
+                                    isActive
+                                      ? { borderColor: theme.colors.primary, borderWidth: 1.5 }
+                                      : { borderColor: theme.colors.borderLight, borderWidth: 1 },
+                                  ]}
+                                  onPress={() => {
+                                    setSelectedSub(item);
+                                    setSubModalVisible(false);
+                                    setSubSearch("");
+                                    if (errors.subCategory) setErrors((prev) => ({ ...prev, subCategory: "" }));
+                                  }}
+                                >
+                                  <View style={[styles.subItemNumBadge, { backgroundColor: isActive ? theme.colors.primary : `${theme.colors.textMuted}10`, width: 22, height: 22, borderRadius: 11 }]}>
+                                    <Text style={[styles.subItemNumText, { color: isActive ? "#fff" : theme.colors.textMuted, fontSize: 10 }]}>
+                                      {String(index + 1).padStart(2, "0")}
+                                    </Text>
+                                  </View>
+
+                                  <View style={{ flex: 1, marginLeft: 8 }}>
+                                    <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text, fontSize: 12 }]}>
+                                      {item.name}
+                                    </Text>
+                                    {item.serviceCharges?.length > 0 && (
+                                      <Text style={[styles.subItemCharge, { color: theme.colors.textMuted, fontSize: 10 }]}>
+                                        ₹{item.serviceCharges[0].amount} base charge
+                                      </Text>
+                                    )}
+                                  </View>
+
+                                  {isActive && (
+                                    <View style={[styles.subItemCheckCircle, { backgroundColor: theme.colors.primary, width: 18, height: 18, borderRadius: 9 }]}>
+                                      <Check size={10} color="#fff" />
+                                    </View>
+                                  )}
+                                </Pressable>
+                              );
+                            });
+                          })()}
+                        </ScrollView>
+                      )}
+                    </View>
                   )}
                 </View>
-              )}
-            </View>
-            {submitAttempted && errors.subCategory ? (
-              <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.subCategory}</Text>
-            ) : null}
-            {selectedSub && (
-              <View style={[styles.priceNoteBox, { backgroundColor: theme.colors.card, borderColor: `${theme.colors.primary}20` }]}>
-                <Text style={{ fontSize: 12, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
-                  Estimated Price Breakdown
-                </Text>
-                {(() => {
-                  let serviceChargeObj = null;
-                  if (Array.isArray(selectedSub.serviceCharges) && selectedSub.serviceCharges.length > 0) {
-                    serviceChargeObj = selectedSub.serviceCharges[0];
-                  } else if (selectedSub.serviceCharges && typeof selectedSub.serviceCharges === "object") {
-                    serviceChargeObj = selectedSub.serviceCharges;
-                  }
+                {submitAttempted && errors.subCategory ? (
+                  <Text style={[styles.errorText, { color: theme.colors.danger }]}>{errors.subCategory}</Text>
+                ) : null}
 
-                  if (serviceChargeObj) {
-                    const base = Number(serviceChargeObj.serviceCharge ?? serviceChargeObj.amount) || 0;
-                    const gstPct = Number(serviceChargeObj.gstPercent ?? 18);
-                    const gstAmt = Math.round((base * gstPct) / 100);
-                    const total = base + gstAmt;
-                    return (
-                      <>
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Service Charge</Text>
-                          <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>₹{base}</Text>
-                        </View>
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
-                          <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>GST ({gstPct}%)</Text>
-                          <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>₹{gstAmt}</Text>
-                        </View>
-                        <View style={{ height: 1, backgroundColor: theme.colors.borderLight, marginBottom: 8 }} />
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
-                          <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.text }}>Total Estimated</Text>
-                          <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.primary }}>₹{total}</Text>
-                        </View>
-                      </>
-                    );
-                  }
-
-                  return (
-                    <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 10 }}>
-                      Price to be confirmed after inspection
+                {/* Estimated Price Breakdown */}
+                {selectedSub && (
+                  <View style={[styles.priceNoteBox, { backgroundColor: theme.colors.card, borderColor: `${theme.colors.primary}20` }]}>
+                    <Text style={{ fontSize: 12, fontWeight: "800", color: theme.colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
+                      Estimated Price Breakdown
                     </Text>
-                  );
-                })()}
-                <View style={{ backgroundColor: `${theme.colors.warning}12`, borderRadius: 8, padding: 8, flexDirection: "row", gap: 6 }}>
-                  <Text style={{ fontSize: 10 }}>⚠️</Text>
-                  <Text style={{ fontSize: 11, color: theme.colors.textMuted, flex: 1, lineHeight: 16 }}>
-                    Disclaimer: This is an approximate estimate. The final price may differ after on-site inspection or if additional work is required.
-                  </Text>
-                </View>
+                    {(() => {
+                      let serviceChargeObj: any = null;
+                      if (Array.isArray(selectedSub.serviceCharges) && selectedSub.serviceCharges.length > 0) {
+                        serviceChargeObj = selectedSub.serviceCharges[0];
+                      } else if (selectedSub.serviceCharges && typeof selectedSub.serviceCharges === "object") {
+                        serviceChargeObj = selectedSub.serviceCharges;
+                      }
+                      if (serviceChargeObj) {
+                        const base = Number(serviceChargeObj.serviceCharge ?? serviceChargeObj.amount) || 0;
+                        const gstPct = Number(serviceChargeObj.gstPercent ?? 18);
+                        const gstAmt = Math.round((base * gstPct) / 100);
+                        const total = base + gstAmt;
+                        return (
+                          <>
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                              <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>Service Charge</Text>
+                              <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>₹{base}</Text>
+                            </View>
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
+                              <Text style={{ fontSize: 13, color: theme.colors.textMuted }}>GST ({gstPct}%)</Text>
+                              <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>₹{gstAmt}</Text>
+                            </View>
+                            <View style={{ height: 1, backgroundColor: theme.colors.borderLight, marginBottom: 8 }} />
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
+                              <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.text }}>Total Estimated</Text>
+                              <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.primary }}>₹{total}</Text>
+                            </View>
+                          </>
+                        );
+                      }
+                      return (
+                        <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 10 }}>
+                          Price to be confirmed after inspection
+                        </Text>
+                      );
+                    })()}
+                    <View style={{ backgroundColor: `${theme.colors.warning}12`, borderRadius: 8, padding: 8, flexDirection: "row", gap: 6 }}>
+                      <Text style={{ fontSize: 10 }}>⚠️</Text>
+                      <Text style={{ fontSize: 11, color: theme.colors.textMuted, flex: 1, lineHeight: 16 }}>
+                        Disclaimer: This is an approximate estimate. The final price may differ after on-site inspection or if additional work is required.
+                      </Text>
+                    </View>
+                  </View>
+                )}
               </View>
-            )}
-          </View>
+            </>
+          )}
 
           {/* Description */}
           <View style={styles.fieldWrapper}>
@@ -2085,7 +2323,7 @@ export const RaiseTicketScreen = () => {
         </KeyboardAvoidingView>
       </Modal>
 
-    
+
     </KeyboardAvoidingView>
   );
 };
@@ -2341,7 +2579,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   videoOverlay: {
-    ...StyleSheet.absoluteFillObject,  
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0, 0, 0, 0.4)",
     alignItems: "center",
     justifyContent: "center",

@@ -22,7 +22,7 @@ export type CustomerStackParamList = {
   CustomerJobDetails: { jobId: string };
   CustomerDashboard: undefined;
   RaiseTicket:
-    | { categoryId?: string; categoryName?: string; assetId?: string; assetName?: string }
+    | { categoryId?: string; categoryName?: string; assetId?: string; assetName?: string; contractId?: string; fromAMC?: boolean; bookingMode?: "NORMAL" | "AMC" }
     | undefined;
   TicketHistory: undefined;
   CustomerTicketDetails: { ticketId: string };

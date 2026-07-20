@@ -17,6 +17,6 @@ export const APP_CONFIG = {
   tenantCode: "abcservicepvtltd001",
   appName: "ABC service pvt ltd",
   
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_URL || "http://192.168.0.105:3000/api/v1",
+  apiBaseUrl: process.env.EXPO_PUBLIC_API_URL || "http://192.168.1.8:3000/api/v1",
   timeoutMs: 15000,
 };

@@ -19,8 +19,8 @@ export const AMCBadge: React.FC<AMCBadgeProps> = ({ label = "AMC Active", active
       style={[
         styles.badge,
         {
-          backgroundColor: `${color}15`,
-          borderColor: `${color}40`,
+          backgroundColor: active ? `${color}14` : `${color}0d`,
+          borderColor: active ? `${color}35` : `${color}20`,
         },
         style,
       ]}
@@ -36,20 +36,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     alignSelf: "flex-start",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
-    gap: 5,
+    gap: 6,
   },
   dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
   label: {
-    fontSize: 11,
-    fontWeight: "700",
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: -0.1,
   },
 });
 
