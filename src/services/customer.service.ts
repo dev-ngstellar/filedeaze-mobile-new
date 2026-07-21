@@ -210,7 +210,7 @@ export interface CustomerAsset {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
-  category: { id: string; name: string } | null;
+  images?: { id: string; imageUrl: string }[];
   /** True when this asset has a currently ACTIVE AMC subscription. */
   hasActiveAmc: boolean;
 }

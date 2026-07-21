@@ -145,132 +145,116 @@ export const AmcDetailsScreen = () => {
           />
         }
       >
-        {/* ── Section 1: AMC Summary ── */}
-        <AMCPlanCard
-          planName={sub.plan?.name ?? "—"}
-          status={sub.status}
-          subtitle={sub.endDate ? `Expires ${formatDate(sub.endDate)}` : undefined}
-        />
-
-        {/* ── Section 1b: Visit Stats ── */}
-        <View style={{ marginBottom: 16 }}>
-          <AMCVisitCard
-            totalVisits={sub.contractTotalVisits}
-            completedVisits={completedVisits}
-            remainingVisits={sub.remainingVisits}
+        {/* ── Section 1: AMC Name Header ── */}
+        <View style={styles.headerPlanWrap}>
+          <AMCPlanCard
+            planName={sub.plan?.name ?? "—"}
+            status={sub.status}
+            subtitle={sub.endDate ? `Expires ${formatDate(sub.endDate)}` : undefined}
           />
         </View>
 
-        {/* ── Section 2: Contract Details ── */}
+        {/* ── Section 2: Visit Stats (Total, Used, Remaining) ── */}
+        <View style={styles.statsCardWrap}>
+          <AMCVisitCard
+            totalVisits={sub.contractTotalVisits ?? sub.plan?.visitCount ?? 0}
+            completedVisits={completedVisits}
+            remainingVisits={sub.remainingVisits ?? 0}
+          />
+        </View>
+
+        {/* ── Section 3: Contract Details ── */}
         <View style={styles.sectionContainer}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Contract Details</Text>
+          <View style={styles.sectionTitleRow}>
+            <ClipboardList size={16} color={theme.colors.primary} />
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Contract Details</Text>
+          </View>
           <AppCard style={styles.detailsCard}>
             <View style={styles.infoRow}>
-              <Calendar size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><Calendar size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Start Date</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>{formatDate(sub.startDate)}</Text>
             </View>
             <View style={styles.infoRow}>
-              <Calendar size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><Calendar size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>End Date</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>{formatDate(sub.endDate)}</Text>
             </View>
             <View style={styles.infoRow}>
-              <Clock size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><Clock size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Duration</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>{sub.contractDurationMonths} months</Text>
             </View>
             <View style={styles.infoRow}>
-              <ClipboardList size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><ClipboardList size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Total Visits</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>{sub.contractTotalVisits} visits</Text>
             </View>
-            <View style={styles.infoRow}>
-              <Tag size={16} color={theme.colors.textMuted} />
+            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+              <View style={styles.iconBadge}><Tag size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Contract Price</Text>
-              <Text style={[styles.infoValue, { color: theme.colors.primary, fontWeight: "700" }]}>
+              <Text style={[styles.infoValue, { color: theme.colors.primary, fontWeight: "800", fontSize: 15 }]}>
                 {formatPrice(sub.contractPrice)}
               </Text>
             </View>
           </AppCard>
         </View>
 
-        {/* ── Section 3: Coverage Details ── */}
-        <View style={styles.sectionContainer}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Coverage</Text>
-          <AMCCoverageCard coverageTerms={coverageTerms} />
-          {sub.plan?.description ? (
-            <Text style={[styles.planDescription, { color: theme.colors.textMuted }]}>{sub.plan.description}</Text>
-          ) : null}
-        </View>
-
         {/* ── Section 4: Asset Details ── */}
         <View style={styles.sectionContainer}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Asset Details</Text>
+          <View style={styles.sectionTitleRow}>
+            <Cpu size={16} color={theme.colors.primary} />
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Asset Details</Text>
+          </View>
           <AppCard style={styles.detailsCard}>
             <View style={styles.infoRow}>
-              <Cpu size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><Cpu size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Asset Name</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>
                 {sub.customerAsset?.name ?? "—"}
               </Text>
             </View>
             <View style={styles.infoRow}>
-              <Info size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><Info size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Brand</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>
                 {sub.customerAsset?.brand ?? "—"}
               </Text>
             </View>
             <View style={styles.infoRow}>
-              <Info size={16} color={theme.colors.textMuted} />
+              <View style={styles.iconBadge}><Info size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Model</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>
                 {sub.customerAsset?.model ?? "—"}
               </Text>
             </View>
-            <View style={styles.infoRow}>
-              <Info size={16} color={theme.colors.textMuted} />
+            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+              <View style={styles.iconBadge}><Info size={14} color={theme.colors.primary} /></View>
               <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Serial Number</Text>
               <Text style={[styles.infoValue, { color: theme.colors.text }]}>
                 {sub.customerAsset?.serialNumber ?? "—"}
               </Text>
             </View>
-
-            {(sub.status === "ACTIVE" || sub.status === "RENEWED") && (
-              <AppButton
-                title="Raise Service"
-                variant="primary"
-                icon={<Wrench size={16} color="#ffffff" style={{ marginRight: 6 }} />}
-                onPress={() => {
-                  navigation.navigate("RaiseTicket", {
-                    assetId: sub.customerAsset?.id || sub.customerAssetId,
-                    assetName: sub.customerAsset?.name || "Covered Equipment",
-                    contractId: sub.id,
-                    bookingMode: "AMC",
-                    fromAMC: true,
-                  });
-                }}
-                style={{ marginTop: 14 }}
-              />
-            )}
           </AppCard>
         </View>
 
         {/* ── Section 5: Service Visit History ── */}
         <View style={styles.sectionContainer}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Service Visit History</Text>
+          <View style={styles.sectionTitleRow}>
+            <Wrench size={16} color={theme.colors.primary} />
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Service Visit History</Text>
+          </View>
           {visits.length === 0 ? (
             <AppCard style={styles.detailsCard}>
               <Text style={[styles.emptyVisitsText, { color: theme.colors.textMuted }]}>
-                No service visits logged for this contract.
+                No service visits logged for this contract yet.
               </Text>
             </AppCard>
           ) : (
             visits.map((visit, index) => (
               <AppCard key={visit.id || index} style={styles.visitCard}>
                 <View style={styles.visitHeader}>
-                  <View style={[styles.visitNumberBubble, { backgroundColor: `${theme.colors.primary}10` }]}>
+                  <View style={[styles.visitNumberBubble, { backgroundColor: `${theme.colors.primary}12` }]}>
                     <Wrench size={12} color={theme.colors.primary} />
                     <Text style={[styles.visitNumberText, { color: theme.colors.primary }]}>
                       Visit #{visit.visitNumber}
@@ -468,19 +452,36 @@ const styles = StyleSheet.create({
   planTitle: { fontSize: 18, fontWeight: "700" },
   statusRow: { marginTop: 4, flexDirection: "row" },
 
-  divider: { height: 1, marginVertical: 12 },
+  headerPlanWrap: { marginBottom: 12 },
+  statsCardWrap: { marginBottom: 16 },
 
   // Section styling
   sectionContainer: { marginBottom: 20 },
   sectionTitle: { fontSize: 14, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, marginLeft: 4 },
+  sectionTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  iconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: "rgba(79, 111, 232, 0.08)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   planDescription: { fontSize: 12, lineHeight: 17, marginTop: 10, paddingHorizontal: 4 },
 
-  detailsCard: { padding: 16, borderRadius: 12 },
+  detailsCard: { padding: 16, borderRadius: 14, borderWidth: 1, borderColor: "rgba(15, 23, 42, 0.06)" },
   infoRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingVertical: 8,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
   },
   infoLabel: { fontSize: 13, flex: 1, marginLeft: 8 },
   infoValue: { fontSize: 13, fontWeight: "500" },

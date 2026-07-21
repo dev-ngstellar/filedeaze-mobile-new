@@ -204,7 +204,17 @@ export const LiveTrackingScreen = () => {
         review,
       });
       setFeedbackVisible(false);
-      Alert.alert("Thank You!", "Your feedback has been submitted successfully.");
+      Alert.alert("Thank You!", "Thank you for your feedback.", [
+        {
+          text: "OK",
+          onPress: () => {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: "CustomerDashboard" }],
+            });
+          },
+        },
+      ]);
     } catch (err: any) {
       Alert.alert("Error", err?.message || "Failed to submit feedback");
     } finally {

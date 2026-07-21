@@ -115,10 +115,16 @@ apiClient.interceptors.response.use(
       }
     }
 
-    const errorMessage =
-      error.response?.data?.message ||
-      error.message ||
-      "An unexpected network error occurred.";
+    let errorMessage = "Something went wrong. Please try again.";
+    const respMessage = error.response?.data?.message;
+
+    if (Array.isArray(respMessage) && respMessage.length > 0) {
+      errorMessage = respMessage.join("\n");
+    } else if (typeof respMessage === "string" && respMessage.trim()) {
+      errorMessage = respMessage;
+    } else if (error.message && typeof error.message === "string") {
+      errorMessage = error.message;
+    }
 
     return Promise.reject(new Error(errorMessage));
   }

@@ -85,11 +85,13 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
   // 1. Service Charge: billable if > 0 and not waived
   const billableServiceCharge = (serviceCharge > 0 && !serviceChargeWaived) ? serviceCharge : 0;
 
-  // 2. GST: calculated ONLY on Service Charge (if GST is enabled and serviceCharge > 0)
+  // 2. GST: use backend gstAmount if provided, or calculate ONLY on billable Service Charge
   const isGstEnabled = gstPercent !== undefined && gstPercent > 0;
-  const calculatedGstAmount = (isGstEnabled && billableServiceCharge > 0)
-    ? Math.round((billableServiceCharge * gstPercent) / 100 * 100) / 100
-    : 0;
+  const calculatedGstAmount = (gstAmount !== undefined && gstAmount !== null)
+    ? gstAmount
+    : (isGstEnabled && billableServiceCharge > 0)
+      ? Math.round((billableServiceCharge * gstPercent) / 100 * 100) / 100
+      : 0;
 
   // 3. Labour Charge: billable if > 0 and not waived
   const billableLabourCharge = (labourCharge > 0 && !labourChargeWaived) ? labourCharge : 0;
@@ -105,7 +107,9 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
 
   // 7. Subtotal and Grand Total:
   const displaySubtotal = billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
-  const displayGrandTotal = Math.max(0, displaySubtotal + calculatedGstAmount);
+  const displayGrandTotal = (grandTotal !== undefined && grandTotal !== null && grandTotal > 0)
+    ? grandTotal
+    : Math.max(0, displaySubtotal + calculatedGstAmount);
 
   // Split spare parts by coverage type for the itemised section
   const chargeableParts = spareParts?.filter((p) => p.coverageType === "OUT_OF_WARRANTY") ?? [];

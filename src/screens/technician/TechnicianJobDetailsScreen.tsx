@@ -873,6 +873,8 @@ export const TechnicianJobDetailsScreen = () => {
       queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
       queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
       queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+      queryClient.invalidateQueries({ queryKey: ["amc"] });
+      queryClient.invalidateQueries({ queryKey: ["amcSubscriptionDetails"] });
 
       await refetch();
       setCompleteStep(2);
@@ -2171,7 +2173,7 @@ export const TechnicianJobDetailsScreen = () => {
                       Billing & Payment
                     </Text>
                     <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
-                      
+
                       {/* Service Charge Input */}
                       <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>Service Charge ({currencySymbol})</Text>
                       <View
@@ -2293,11 +2295,11 @@ export const TechnicianJobDetailsScreen = () => {
                             spareParts={
                               paymentSpareParts.length > 0
                                 ? paymentSpareParts.map((p) => ({
-                                    name: p.partName,
-                                    quantity: p.quantity,
-                                    unitPrice: p.unitPrice,
-                                    coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
-                                  }))
+                                  name: p.partName,
+                                  quantity: p.quantity,
+                                  unitPrice: p.unitPrice,
+                                  coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+                                }))
                                 : undefined
                             }
                           />
@@ -2512,11 +2514,11 @@ export const TechnicianJobDetailsScreen = () => {
                     spareParts={
                       paymentSpareParts.length > 0
                         ? paymentSpareParts.map((p) => ({
-                            name: p.partName,
-                            quantity: p.quantity,
-                            unitPrice: p.unitPrice,
-                            coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
-                          }))
+                          name: p.partName,
+                          quantity: p.quantity,
+                          unitPrice: p.unitPrice,
+                          coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+                        }))
                         : undefined
                     }
                   />

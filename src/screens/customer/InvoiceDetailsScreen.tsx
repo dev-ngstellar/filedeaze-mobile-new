@@ -146,8 +146,8 @@ export const InvoiceDetailsScreen = () => {
             </thead>
             <tbody>
               ${chargeableParts.map((p: any) => {
-                const total = p.unitPrice * p.quantity;
-                return `
+          const total = p.unitPrice * p.quantity;
+          return `
                   <tr style="border-bottom: 1px dashed #e2e8f0;">
                     <td style="font-size: 12px; padding: 8px; font-weight: bold; color: #1e293b;">+ ${p.name}</td>
                     <td style="text-align: center; font-size: 12px; padding: 8px; color: #1e293b;">${p.quantity}</td>
@@ -155,7 +155,7 @@ export const InvoiceDetailsScreen = () => {
                     <td style="text-align: right; font-size: 12px; padding: 8px; font-weight: bold; color: #1e293b;">₹${total.toLocaleString('en-IN')}</td>
                   </tr>
                 `;
-              }).join("")}
+        }).join("")}
             </tbody>
           </table>
         `;
@@ -175,8 +175,8 @@ export const InvoiceDetailsScreen = () => {
             </thead>
             <tbody>
               ${warrantyParts.map((p: any) => {
-                const total = p.unitPrice * p.quantity;
-                return `
+          const total = p.unitPrice * p.quantity;
+          return `
                   <tr style="border-bottom: 1px dashed #e2e8f0;">
                     <td style="font-size: 12px; padding: 8px; font-weight: bold; color: #10b981;">- ${p.name}</td>
                     <td style="text-align: center; font-size: 12px; padding: 8px; color: #1e293b;">${p.quantity}</td>
@@ -184,7 +184,7 @@ export const InvoiceDetailsScreen = () => {
                     <td style="text-align: right; font-size: 12px; padding: 8px; font-weight: bold; color: #10b981;">FREE</td>
                   </tr>
                 `;
-              }).join("")}
+        }).join("")}
             </tbody>
           </table>
         `;
@@ -414,19 +414,19 @@ export const InvoiceDetailsScreen = () => {
     invoice.subtotal ??
     0
   );
-  
+
   const extraCharges = Number(
     invoice.extraChargesTotal ??
     invoice.extraCharges ??
     0
   );
-  
+
   const gstAmount = baseAmount > 0 ? Number(
     invoice.gstAmount ??
     invoice.gst ??
     0
   ) : 0;
-  
+
   const rawTotal = Number(
     invoice.totalAmount ??
     invoice.grandTotal ??
@@ -434,7 +434,7 @@ export const InvoiceDetailsScreen = () => {
     (baseAmount + extraCharges + gstAmount)
   );
 
-  const totalAmount = baseAmount > 0 ? rawTotal : (rawTotal - Number(invoice.gstAmount ?? invoice.gst ?? 0));
+  const totalAmount = rawTotal;
 
   const paymentMethod = invoice.paymentMethod ?? invoice.payment?.method ?? "—";
   const paymentStatus = invoice.paymentStatus ?? invoice.payment?.status ?? "—";
@@ -458,7 +458,7 @@ export const InvoiceDetailsScreen = () => {
           <PaymentSummaryCard
             invoiceNumber={invoiceNumber}
             ticketNumber={ticketNumber}
-            customerName={invoice.ticket?.customer?.name || "Customer"}
+            customerName={invoice.ticket?.customer?.name || invoice.customerName || invoice.ticket?.customerName || "Customer"}
             paymentMode={paymentMethod}
             paymentStatus={paymentStatus}
             invoiceDate={formatDate(invoice.generatedAt)}
@@ -474,7 +474,16 @@ export const InvoiceDetailsScreen = () => {
             gstPercent={Number(invoice.gstPercent ?? 0)}
             gstAmount={gstAmount}
             grandTotal={totalAmount}
-            spareParts={invoice.ticket?.spareParts}
+            spareParts={
+              invoice.ticket?.spareParts
+                ? invoice.ticket.spareParts.map((p: any) => ({
+                  name: p.sparePart?.partName ?? p.name ?? "Spare Part",
+                  quantity: Number(p.quantity ?? 1),
+                  unitPrice: Number(p.unitPrice ?? 0),
+                  coverageType: (p.coverageType ?? p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+                }))
+                : undefined
+            }
           />
         </View>
 

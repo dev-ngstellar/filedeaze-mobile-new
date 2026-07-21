@@ -187,9 +187,9 @@ export const MyAmcScreen = () => {
           {isVisitTrackingAvailable && (
             <View style={styles.infoRow}>
               <ClipboardList size={13} color={theme.colors.textMuted} />
-              <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Visits Remaining:</Text>
+              <Text style={[styles.infoLabel, { color: theme.colors.textMuted }]}>Used Visits:</Text>
               <Text style={[styles.infoValue, { color: theme.colors.primary, fontWeight: "700" }]}>
-                {item.remainingVisits} / {item.contractTotalVisits}
+                {Math.max(0, (item.contractTotalVisits ?? 0) - (item.remainingVisits ?? 0))} / {item.contractTotalVisits ?? 0}
               </Text>
             </View>
           )}

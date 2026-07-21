@@ -840,7 +840,11 @@ export const RaiseTicketScreen = () => {
         });
       }, 1000);
     } catch (err: any) {
-      triggerPopup("danger", "Submission Error", err?.message || "Failed to raise support ticket");
+      triggerPopup(
+        "danger",
+        "Submission Error",
+        err?.message || "Something went wrong. Please try again."
+      );
     }
   };
 

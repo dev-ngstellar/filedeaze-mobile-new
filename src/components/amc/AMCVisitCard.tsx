@@ -4,9 +4,9 @@ import { useTheme } from "../../theme";
 import { AppCard } from "../AppCard";
 
 interface AMCVisitCardProps {
-  totalVisits: number;
-  completedVisits: number;
-  remainingVisits: number;
+  totalVisits?: number;
+  completedVisits?: number;
+  remainingVisits?: number;
 }
 
 /** Visits / Completed / Remaining stat row for an AMC contract — all values sourced from the
@@ -14,10 +14,14 @@ interface AMCVisitCardProps {
 export const AMCVisitCard: React.FC<AMCVisitCardProps> = ({ totalVisits, completedVisits, remainingVisits }) => {
   const theme = useTheme();
 
-  const stats: { label: string; value: number; color: string }[] = [
-    { label: "Visits", value: totalVisits, color: theme.colors.text },
-    { label: "Completed", value: completedVisits, color: theme.colors.success },
-    { label: "Remaining", value: remainingVisits, color: theme.colors.primary },
+  const totalVis = totalVisits ?? 0;
+  const remVis = remainingVisits ?? 0;
+  const usedVis = Math.max(0, totalVis - remVis);
+
+  const stats: { label: string; value: string; color: string }[] = [
+    { label: "Total Visits", value: String(totalVis), color: theme.colors.text },
+    { label: "Used Visits", value: `${usedVis} / ${totalVis}`, color: theme.colors.success },
+    { label: "Remaining", value: String(remVis), color: theme.colors.primary },
   ];
 
   return (
@@ -38,7 +42,7 @@ export const AMCVisitCard: React.FC<AMCVisitCardProps> = ({ totalVisits, complet
 const styles = StyleSheet.create({
   card: { flexDirection: "row", alignItems: "center", paddingVertical: 16 },
   statCell: { flex: 1, alignItems: "center" },
-  statValue: { fontSize: 22, fontWeight: "800" },
+  statValue: { fontSize: 18, fontWeight: "800" },
   statLabel: { fontSize: 11, fontWeight: "600", marginTop: 4, textTransform: "uppercase", letterSpacing: 0.4 },
   divider: { width: 1, alignSelf: "stretch", marginVertical: 4 },
 });

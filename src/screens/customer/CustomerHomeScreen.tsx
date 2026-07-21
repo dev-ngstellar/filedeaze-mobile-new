@@ -95,7 +95,7 @@ export const CustomerHomeScreen = () => {
   const featuredIndexRef = useRef(0);
 
   // Queries
-  const [bookingMode, setBookingMode] = useState<"NORMAL" | "AMC">("NORMAL");
+  const [bookingMode, setBookingMode] = useState<"NORMAL" | "AMC">("AMC");
   const { data: categories = [], isLoading: isCategoriesLoading } = useCategories();
   const {
     data: tickets = [],

@@ -70,7 +70,7 @@ export const PostLoginSplashScreen = () => {
 
     // Navigate after 2.8 seconds
     const timer = setTimeout(() => {
-      const target = isTechnician ? "TechnicianHome" : "CustomerHome";
+      const target = isTechnician ? "TechnicianHome" : "CustomerDashboard";
       navigation.replace(target);
     }, 2800);
 

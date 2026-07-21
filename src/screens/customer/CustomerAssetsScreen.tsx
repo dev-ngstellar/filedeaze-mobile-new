@@ -8,14 +8,15 @@ import {
   Pressable,
   TextInput,
   Dimensions,
+  Image,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Cpu, Info, Search, Sparkles, ShieldCheck, ChevronRight } from "lucide-react-native";
+import { Cpu, Info, Search, Sparkles, ShieldCheck, ChevronRight, Ticket, PlusCircle, Wrench, AlertCircle } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useTheme } from "../../theme";
 import { useCustomerAssets } from "../../hooks/useCustomer";
-import { useMyAmcSubscriptions } from "../../hooks/useAmc";
+import { useMyAmcSubscriptions, useActiveAmcSubscriptionForAsset } from "../../hooks/useAmc";
 import { CustomerAsset } from "../../services/customer.service";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppLoader } from "../../components/AppLoader";
@@ -24,69 +25,203 @@ import { AMCBadge } from "../../components/amc/AMCBadge";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList>;
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const GRID_CARD_W = (SCREEN_WIDTH - 32 - 12) / 2;
+const getAssetCategoryFallbackImage = (name: string): string => {
+  const n = name.toLowerCase();
+  if (n.includes("electric") || n.includes("power") || n.includes("wire") || n.includes("wiring") || n.includes("inverter") || n.includes("fan"))
+    return "https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=400&h=260&fit=crop";
+  if (n.includes("plumb") || n.includes("water") || n.includes("leak") || n.includes("pipe") || n.includes("tap") || n.includes("sink"))
+    return "https://images.unsplash.com/photo-1607400201889-565b1ee75f8e?w=400&h=260&fit=crop";
+  if (n.includes("ac") || n.includes("air con") || n.includes("cool") || n.includes("hvac") || n.includes("refriger"))
+    return "https://images.unsplash.com/photo-1563014572-74af7be95775?w=400&h=260&fit=crop";
+  if (n.includes("carpent") || n.includes("wood") || n.includes("furniture") || n.includes("cabinet"))
+    return "https://images.unsplash.com/photo-1504148455328-c376907d081c?w=400&h=260&fit=crop";
+  if (n.includes("paint") || n.includes("colour") || n.includes("color"))
+    return "https://images.unsplash.com/photo-1562259929-b4e1fd3aef09?w=400&h=260&fit=crop";
+  if (n.includes("clean") || n.includes("sweep") || n.includes("mop"))
+    return "https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=400&h=260&fit=crop";
+  if (n.includes("appliance") || n.includes("washing") || n.includes("fridge") || n.includes("microwave"))
+    return "https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=400&h=260&fit=crop";
+  return "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=400&h=260&fit=crop";
+};
 
-/* Registered Equipment Category Card */
+/* Per-Asset AMC Plan Equipment Card Component */
 const EquipmentCategoryCard: React.FC<{ asset: CustomerAsset }> = ({ asset }) => {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
+  const { data: activeAmcSub } = useActiveAmcSubscriptionForAsset(asset.id);
+  const [imageError, setImageError] = useState(false);
 
-  const handleRaiseService = () => {
+  const planName = activeAmcSub?.plan?.name || (asset as any).activeAmcPlanName || (asset.hasActiveAmc ? "Active AMC Plan" : null);
+  const remaining = activeAmcSub?.remainingVisits ?? 0;
+  const total = activeAmcSub?.contractTotalVisits ?? activeAmcSub?.plan?.visitCount ?? 0;
+  const isExpired = activeAmcSub?.endDate ? new Date(activeAmcSub.endDate).getTime() < Date.now() : false;
+  const isExhausted = remaining <= 0;
+  const canRaiseTicket = asset.hasActiveAmc && !isExpired && !isExhausted;
+
+  const firstImageUrl = asset.images && asset.images.length > 0 ? asset.images[0].imageUrl : null;
+  const showUploadedImage = firstImageUrl && !imageError;
+
+  const expiryDate = activeAmcSub?.endDate
+    ? new Date(activeAmcSub.endDate).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : null;
+
+  const handleRaiseTicket = () => {
+    if (!canRaiseTicket) return;
     navigation.navigate("RaiseTicket", {
       assetId: asset.id,
       assetName: asset.name,
-      bookingMode: asset.hasActiveAmc ? "AMC" : "NORMAL",
-      fromAMC: asset.hasActiveAmc,
+      bookingMode: "AMC",
+      fromAMC: true,
     });
   };
 
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.catCardUC,
-        { backgroundColor: theme.colors.card, width: GRID_CARD_W },
-        pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
+    <View
+      style={[
+        styles.assetAmcCardWrap,
+        { backgroundColor: theme.colors.card, borderColor: theme.colors.borderLight },
       ]}
-      onPress={handleRaiseService}
     >
-      {/* Icon / Appliance Image Box */}
-      <View style={[styles.catImageWrap, { backgroundColor: `${theme.colors.primary}0c` }]}>
-        <Cpu size={36} color={theme.colors.primary} />
-        {asset.hasActiveAmc && (
-          <View style={styles.badgeOverImage}>
-            <AMCBadge label="AMC Active" active />
-          </View>
-        )}
+      {/* Top Header Row: Asset Thumbnail + Name + AMC Status Badge */}
+      <View style={styles.assetCardHeaderRow}>
+        <View style={[styles.assetThumbBox, { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight }]}>
+          <Image
+            source={{ uri: showUploadedImage ? firstImageUrl! : getAssetCategoryFallbackImage(asset.name) }}
+            style={styles.assetThumbImage}
+            resizeMode="cover"
+            onError={() => setImageError(true)}
+          />
+        </View>
+
+        <View style={{ flex: 1, paddingRight: 8 }}>
+          <Text style={[styles.assetCardTitle, { color: theme.colors.text }]} numberOfLines={1}>
+            {asset.name}
+          </Text>
+          {asset.brand || asset.model ? (
+            <Text style={[styles.assetCardSubtitle, { color: theme.colors.textMuted }]} numberOfLines={1}>
+              {[asset.brand, asset.model].filter(Boolean).join(" · ")}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.assetBadgeContainer}>
+          <AMCBadge
+            label={asset.hasActiveAmc ? (isExpired ? "Expired" : "AMC Active") : "No AMC"}
+            active={asset.hasActiveAmc && !isExpired}
+          />
+        </View>
       </View>
 
-      {/* Content */}
-      <View style={styles.cardContent}>
-        <Text style={[styles.catNameUC, { color: theme.colors.text }]} numberOfLines={2}>
-          {asset.name}
-        </Text>
+      {/* AMC Plan Details Box (if asset has AMC coverage) */}
+      {asset.hasActiveAmc && (
+        <View style={[styles.planDetailsBox, { backgroundColor: `${theme.colors.primary}0a`, borderColor: `${theme.colors.primary}25` }]}>
+          <View style={styles.planHeaderLine}>
+            <View style={styles.planTitleWrap}>
+              <ShieldCheck size={15} color={theme.colors.primary} />
+              <Text style={[styles.planTitleText, { color: theme.colors.primary }]} numberOfLines={1}>
+                {planName || "AMC Plan"}
+              </Text>
+            </View>
 
-        {asset.brand || asset.model ? (
-          <Text style={[styles.brandText, { color: theme.colors.textMuted }]} numberOfLines={1}>
-            {[asset.brand, asset.model].filter(Boolean).join(" · ")}
-          </Text>
-        ) : (
-          <Text style={[styles.brandText, { color: theme.colors.textMuted }]}>
-            Equipment
-          </Text>
-        )}
+            {/* View History Action Pill */}
+            <Pressable
+              onPress={() => {
+                if (activeAmcSub?.id) {
+                  navigation.navigate("AmcDetails", { subscriptionId: activeAmcSub.id });
+                }
+              }}
+              style={({ pressed }) => [
+                styles.viewHistoryPillBtn,
+                { backgroundColor: theme.colors.primary },
+                pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] },
+              ]}
+            >
+              <Text style={styles.viewHistoryPillBtnText}>View History</Text>
+              <ChevronRight size={12} color="#ffffff" />
+            </Pressable>
+          </View>
 
-        {!asset.hasActiveAmc ? (
-          <View style={[styles.statusTag, { backgroundColor: `${theme.colors.textMuted}14` }]}>
-            <Text style={[styles.statusTagText, { color: theme.colors.textMuted }]}>Out of AMC</Text>
+          <View style={styles.planStatsRow}>
+            <View style={styles.planStatCol}>
+              <Text style={[styles.planStatValue, { color: isExhausted ? theme.colors.danger : theme.colors.text }]}>
+                {remaining} / {total}
+              </Text>
+              <Text style={[styles.planStatLabel, { color: theme.colors.textMuted }]}>Visits Remaining</Text>
+            </View>
+
+            <View style={styles.planStatDivider} />
+
+            <View style={styles.planStatCol}>
+              <Text style={[styles.planStatValue, { color: isExpired ? theme.colors.danger : theme.colors.text }]}>
+                {expiryDate || "Active"}
+              </Text>
+              <Text style={[styles.planStatLabel, { color: theme.colors.textMuted }]}>
+                {isExpired ? "Expired" : "Expires"}
+              </Text>
+            </View>
           </View>
-        ) : (
-          <View style={[styles.statusTag, { backgroundColor: `${theme.colors.primary}14` }]}>
-            <Text style={[styles.statusTagText, { color: theme.colors.primary }]}>Tap to raise service</Text>
-          </View>
-        )}
-      </View>
-    </Pressable>
+        </View>
+      )}
+
+      {/* Primary Action Button: [Raise Ticket] or [Quota Exhausted Banner] */}
+      {canRaiseTicket ? (
+        <Pressable
+          onPress={handleRaiseTicket}
+          style={({ pressed }) => [
+            styles.raiseTicketGradientWrap,
+            pressed && { opacity: 0.92, transform: [{ scale: 0.985 }] },
+          ]}
+        >
+          <LinearGradient
+            colors={[theme.colors.primary, "#3b82f6"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.raiseTicketGradient}
+          >
+            <View style={styles.actionIconCircle}>
+              <PlusCircle size={15} color="#ffffff" />
+            </View>
+            <Text style={styles.raiseTicketText}>Raise Ticket</Text>
+            <View style={styles.arrowIconCircle}>
+              <ChevronRight size={14} color="#ffffff" />
+            </View>
+          </LinearGradient>
+        </Pressable>
+      ) : (
+        <View
+          style={[
+            styles.disabledStatusBanner,
+            {
+              backgroundColor: isExhausted || isExpired ? "#fff5f5" : "#f8fafc",
+              borderColor: isExhausted || isExpired ? "#fed7d7" : "#e2e8f0",
+            },
+          ]}
+        >
+          <AlertCircle
+            size={18}
+            color={isExhausted || isExpired ? "#e53e3e" : theme.colors.textMuted}
+            style={{ marginTop: 1 }}
+          />
+          <Text
+            style={[
+              styles.disabledStatusText,
+              {
+                color: isExhausted || isExpired ? "#c53030" : theme.colors.textMuted,
+              },
+            ]}
+          >
+            {isExhausted
+              ? "Quota Exhausted — Please contact your administrator to renew your AMC plan (0 Visits Remaining)"
+              : isExpired
+              ? "AMC Plan Expired"
+              : "No Active AMC Coverage"}
+          </Text>
+        </View>
+      )}
+    </View>
   );
 };
 
@@ -104,10 +239,10 @@ const TopAmcPlanBanner: React.FC = () => {
   const total = activeSub.contractTotalVisits ?? activeSub.plan?.visitCount ?? "—";
   const expiryDate = activeSub.endDate
     ? new Date(activeSub.endDate).toLocaleDateString("en-IN", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    })
     : "Active";
 
   return (
@@ -225,8 +360,6 @@ export const CustomerAssetsScreen = () => {
       <FlatList
         data={filteredAssets}
         keyExtractor={(item) => item.id}
-        numColumns={2}
-        columnWrapperStyle={styles.columnWrapper}
         renderItem={({ item }) => <EquipmentCategoryCard asset={item} />}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
@@ -239,9 +372,6 @@ export const CustomerAssetsScreen = () => {
         }
         ListHeaderComponent={
           <View style={{ marginBottom: 16 }}>
-            {/* Active AMC Plan Dashboard Hero Card — shows this customer's own plan */}
-            <TopAmcPlanBanner />
-
             {/* Registered Equipment Header */}
             <View style={styles.headerBlock}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -477,6 +607,176 @@ const styles = StyleSheet.create({
   statusTagText: {
     fontSize: 10,
     fontWeight: "600",
+  },
+
+  /* Per-Asset AMC Card Styles */
+  assetAmcCardWrap: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: "rgba(15,23,42,0.06)",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  assetCardHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  assetThumbBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+    borderWidth: 1,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    shadowColor: "rgba(15,23,42,0.08)",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  assetThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  assetCardTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    letterSpacing: -0.2,
+  },
+  assetCardSubtitle: {
+    fontSize: 12,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  assetBadgeContainer: {
+    alignItems: "flex-end",
+  },
+  planDetailsBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  planHeaderLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  planTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flex: 1,
+  },
+  planTitleText: {
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: -0.1,
+  },
+  viewHistoryPillBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  viewHistoryPillBtnText: {
+    fontSize: 10.5,
+    fontWeight: "800",
+    color: "#ffffff",
+  },
+  planStatsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 4,
+  },
+  planStatCol: {
+    flex: 1,
+    alignItems: "center",
+  },
+  planStatValue: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  planStatLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  planStatDivider: {
+    width: 1,
+    height: 22,
+    backgroundColor: "rgba(0,0,0,0.08)",
+  },
+  /* Raise Ticket Gradient Button Styles */
+  raiseTicketGradientWrap: {
+    borderRadius: 14,
+    overflow: "hidden",
+    shadowColor: "rgba(59, 130, 246, 0.35)",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  raiseTicketGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  actionIconCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(255, 255, 255, 0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  raiseTicketText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#ffffff",
+    letterSpacing: -0.2,
+    marginLeft: 10,
+    flex: 1,
+  },
+  arrowIconCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disabledStatusBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "flex-start",
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 4,
+  },
+  disabledStatusText: {
+    fontSize: 12.5,
+    fontWeight: "700",
+    lineHeight: 18,
+    flex: 1,
   },
 
   /* Center / Errors */
