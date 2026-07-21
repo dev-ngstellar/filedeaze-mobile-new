@@ -95,8 +95,10 @@ export const CustomerHomeScreen = () => {
   const featuredIndexRef = useRef(0);
 
   // Queries
-  const [bookingMode, setBookingMode] = useState<"NORMAL" | "AMC">("AMC");
   const { data: categories = [], isLoading: isCategoriesLoading } = useCategories();
+  const { hasActiveAmc } = useCustomerHasActiveAmc();
+  const [bookingMode, setBookingMode] = useState<"NORMAL" | "AMC">("NORMAL");
+
   const {
     data: tickets = [],
     isLoading: isTicketsLoading,
@@ -124,8 +126,10 @@ export const CustomerHomeScreen = () => {
   const uploadPhotoMutation = useUploadCustomerProfilePhoto();
   const unreadNotifCount = useUnreadNotificationCount();
 
-  // Central AMC status — drives the bottom nav (Assets vs Tickets) and header ticket icon.
-  const { hasActiveAmc } = useCustomerHasActiveAmc();
+  // Sync booking mode: default to AMC if active AMC subscription exists, otherwise NORMAL
+  useEffect(() => {
+    setBookingMode(hasActiveAmc ? "AMC" : "NORMAL");
+  }, [hasActiveAmc]);
 
   // Form states
   const [name, setName] = useState("");
