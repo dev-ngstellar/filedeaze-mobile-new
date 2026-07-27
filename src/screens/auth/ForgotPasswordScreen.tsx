@@ -7,7 +7,6 @@ import {
   Platform,
   ScrollView,
   Pressable,
-  Alert,
 } from "react-native";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -35,28 +34,70 @@ export const ForgotPasswordScreen = () => {
 
   const {
     control,
-    handleSubmit,
+    getValues,
+    setError: setFormError,
+    clearErrors,
     formState: { errors },
   } = useForm<ForgotPasswordInput>({
     resolver: zodResolver(forgotPasswordSchema),
+    mode: "onChange",
     defaultValues: {
       email: "",
     },
   });
 
-  const onSubmit = async (data: ForgotPasswordInput) => {
-    setLoading(true);
+  const handleGenerateOtp = async () => {
+    const currentValues = getValues();
+    const rawEmail = currentValues.email || "";
+    const cleanEmail = rawEmail.trim();
+
+    console.log("[ForgotPasswordScreen] ==========================================");
+    console.log("[ForgotPasswordScreen] Submitted Raw Email:", JSON.stringify(rawEmail));
+    console.log("[ForgotPasswordScreen] Cleaned Email:", JSON.stringify(cleanEmail));
+
+    const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    const isValid = EMAIL_REGEX.test(cleanEmail);
+    console.log("[ForgotPasswordScreen] Validation Result (isValid):", isValid);
+
+    if (!isValid) {
+      const errorMsg = "Please enter a valid email address.";
+      console.log("[ForgotPasswordScreen] Validation Errors:", errorMsg);
+      console.log("[ForgotPasswordScreen] API Function Called?: NO (Blocked by Validation)");
+      console.log("[ForgotPasswordScreen] Navigation Triggered?: NO (Staying on Screen)");
+
+      setError(errorMsg);
+      setFormError("email", {
+        type: "manual",
+        message: errorMsg,
+      });
+      return;
+    }
+
+    console.log("[ForgotPasswordScreen] Validation Errors: NONE (Valid Email)");
+    clearErrors("email");
     setError(null);
+
+    if (loading) return;
+    setLoading(true);
+
+    console.log("[ForgotPasswordScreen] API Function Called?: YES -> Calling AuthService.forgotPassword(", cleanEmail, ")");
     try {
-      await AuthService.forgotPassword(data.email);
+      await AuthService.forgotPassword(cleanEmail);
+      console.log("[ForgotPasswordScreen] AuthService.forgotPassword SUCCESS -> Navigating to OtpVerification");
       setLoading(false);
       navigation.navigate("OtpVerification", {
-        email: data.email,
+        email: cleanEmail,
         mode: "forgot_password",
       });
     } catch (err: any) {
       setLoading(false);
-      setError(err?.message || "Failed to request reset. Check if email is correct.");
+      const apiErrorMsg = err?.message || "Please enter a valid email address.";
+      console.log("[ForgotPasswordScreen] AuthService.forgotPassword FAILED:", apiErrorMsg);
+      setError(apiErrorMsg);
+      setFormError("email", {
+        type: "manual",
+        message: apiErrorMsg,
+      });
     }
   };
 
@@ -99,8 +140,12 @@ export const ForgotPasswordScreen = () => {
                 placeholder="Enter your email"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
-                error={errors.email?.message}
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (error) setError(null);
+                  if (errors.email) clearErrors("email");
+                }}
+                error={errors.email?.message || error || undefined}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 leftIcon={<Mail size={20} color={theme.colors.textLight} />}
@@ -110,8 +155,9 @@ export const ForgotPasswordScreen = () => {
 
           <AppButton
             title="Generate OTP"
-            onPress={handleSubmit(onSubmit)}
+            onPress={handleGenerateOtp}
             loading={loading}
+            disabled={loading}
             style={{ marginTop: 16 }}
           />
         </AppCard>
@@ -180,4 +226,5 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
 });
+
 export default ForgotPasswordScreen;

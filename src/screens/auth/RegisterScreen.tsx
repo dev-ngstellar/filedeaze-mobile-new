@@ -14,7 +14,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { User, Phone, Lock, ArrowLeft, Mail, MapPin } from "lucide-react-native";
+import { User, Phone, Lock, ArrowLeft, Mail, MapPin, Eye, EyeOff } from "lucide-react-native";
 
 import { useTheme } from "../../theme";
 import AuthService from "../../services/auth.service";
@@ -33,13 +33,18 @@ export const RegisterScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const {
     control,
-    handleSubmit,
+    getValues,
+    setError: setFormError,
+    clearErrors,
     formState: { errors },
   } = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
+    mode: "onChange",
     defaultValues: {
       name: "",
       mobile: "",
@@ -50,17 +55,65 @@ export const RegisterScreen = () => {
     },
   });
 
-  const onSubmit = async (data: RegisterInput) => {
+  const handleRegisterPress = async () => {
     if (loading) return;
-    setLoading(true);
     setError(null);
+
+    const values = getValues();
+    const cleanName = (values.name || "").trim();
+    const cleanMobile = (values.mobile || "").trim();
+    const cleanEmail = (values.email || "").trim();
+    const cleanPassword = values.password || "";
+    const cleanConfirmPassword = values.confirmPassword || "";
+    const cleanAddress = (values.address || "").trim();
+
+    const formErrors: Record<string, string> = {};
+
+    if (!cleanName || cleanName.length < 2) {
+      formErrors.name = "Name must be at least 2 characters";
+    }
+
+    if (!cleanMobile || !/^\d{10}$/.test(cleanMobile)) {
+      formErrors.mobile = "Mobile number must be 10 digits";
+    }
+
+    const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!cleanEmail || !EMAIL_REGEX.test(cleanEmail)) {
+      formErrors.email = "Please enter a valid email address.";
+    }
+
+    if (!cleanPassword || cleanPassword.length < 8 || !/[a-zA-Z]/.test(cleanPassword) || !/\d/.test(cleanPassword)) {
+      formErrors.password = "Password must be at least 8 characters with letters & numbers";
+    }
+
+    if (cleanPassword !== cleanConfirmPassword) {
+      formErrors.confirmPassword = "Passwords do not match.";
+    }
+
+    if (!cleanAddress) {
+      formErrors.address = "Service Address is required";
+    }
+
+    if (Object.keys(formErrors).length > 0) {
+      Object.entries(formErrors).forEach(([field, msg]) => {
+        setFormError(field as any, { type: "manual", message: msg });
+      });
+      const firstErrorMsg = Object.values(formErrors)[0];
+      setError(firstErrorMsg);
+      Alert.alert("Validation Error", firstErrorMsg);
+      return;
+    }
+
+    clearErrors();
+    setLoading(true);
+
     try {
-      const formattedMobile = `+91${data.mobile}`;
+      const formattedMobile = `+91${cleanMobile}`;
       await AuthService.registerCustomer({
-        name: data.name,
-        email: data.email,
+        name: cleanName,
+        email: cleanEmail,
         mobile: formattedMobile,
-        password: data.password,
+        password: cleanPassword,
       });
       setLoading(false);
       Alert.alert(
@@ -68,17 +121,36 @@ export const RegisterScreen = () => {
         "An OTP code has been sent to your email address. Please verify to activate your account."
       );
       navigation.navigate("OtpVerification", {
-        email: data.email,
+        email: cleanEmail,
         mobile: formattedMobile,
         mode: "register",
-        name: data.name,
-        password: data.password,
-        address: data.address,
+        name: cleanName,
+        password: cleanPassword,
+        address: cleanAddress,
         tenantId: APP_CONFIG.tenantId,
       });
     } catch (err: any) {
       setLoading(false);
-      setError(err?.message || "Registration failed. Please try again.");
+      const status = err?.status || err?.response?.status;
+      const msg = (err?.message || "").toLowerCase();
+      const dataMsg = (err?.response?.data?.message || err?.data?.message || "").toLowerCase();
+      const fullErr = `${msg} ${dataMsg}`;
+
+      let friendlyMsg = "Something went wrong. Please try again.";
+
+      if (fullErr.includes("email") && (fullErr.includes("exist") || fullErr.includes("already") || fullErr.includes("registered") || status === 409)) {
+        friendlyMsg = "This email is already registered.";
+        setFormError("email", { type: "manual", message: friendlyMsg });
+      } else if ((fullErr.includes("mobile") || fullErr.includes("phone")) && (fullErr.includes("exist") || fullErr.includes("already") || fullErr.includes("registered") || status === 409)) {
+        friendlyMsg = "This mobile number is already registered.";
+        setFormError("mobile", { type: "manual", message: friendlyMsg });
+      } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("connect") || msg.includes("econnrefused") || status === 0) {
+        friendlyMsg = "Unable to connect. Please check your internet connection.";
+      } else {
+        friendlyMsg = "Something went wrong. Please try again.";
+      }
+
+      setError(friendlyMsg);
     }
   };
 
@@ -117,12 +189,16 @@ export const RegisterScreen = () => {
             name="name"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Full Name"
+                label="Full Name *"
                 placeholder="e.g. Raj Kumar"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (errors.name) clearErrors("name");
+                }}
                 error={errors.name?.message}
+                autoCapitalize="words"
                 leftIcon={<User size={20} color={theme.colors.textLight} />}
               />
             )}
@@ -133,13 +209,17 @@ export const RegisterScreen = () => {
             name="mobile"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Mobile Number"
+                label="Mobile Number *"
                 placeholder="10-digit mobile number"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
+                onChangeText={(val) => {
+                  onChange(val.replace(/\D/g, "").slice(0, 10));
+                  if (errors.mobile) clearErrors("mobile");
+                }}
                 error={errors.mobile?.message}
                 keyboardType="phone-pad"
+                maxLength={10}
                 leftIcon={<Phone size={20} color={theme.colors.textLight} />}
               />
             )}
@@ -150,11 +230,14 @@ export const RegisterScreen = () => {
             name="email"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Email Address"
+                label="Email Address *"
                 placeholder="e.g. customer@email.com"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (errors.email) clearErrors("email");
+                }}
                 error={errors.email?.message}
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -168,15 +251,27 @@ export const RegisterScreen = () => {
             name="password"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Password"
+                label="Password *"
                 placeholder="Minimum 8 characters"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
-                secureTextEntry
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (errors.password) clearErrors("password");
+                }}
+                secureTextEntry={!showPassword}
                 error={errors.password?.message}
                 autoCapitalize="none"
                 leftIcon={<Lock size={20} color={theme.colors.textLight} />}
+                rightIcon={
+                  <Pressable onPress={() => setShowPassword((prev) => !prev)} style={{ padding: 4 }}>
+                    {showPassword ? (
+                      <EyeOff size={18} color={theme.colors.textMuted} />
+                    ) : (
+                      <Eye size={18} color={theme.colors.textMuted} />
+                    )}
+                  </Pressable>
+                }
               />
             )}
           />
@@ -186,15 +281,27 @@ export const RegisterScreen = () => {
             name="confirmPassword"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Confirm Password"
+                label="Confirm Password *"
                 placeholder="Confirm your password"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
-                secureTextEntry
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (errors.confirmPassword) clearErrors("confirmPassword");
+                }}
+                secureTextEntry={!showConfirmPassword}
                 error={errors.confirmPassword?.message}
                 autoCapitalize="none"
                 leftIcon={<Lock size={20} color={theme.colors.textLight} />}
+                rightIcon={
+                  <Pressable onPress={() => setShowConfirmPassword((prev) => !prev)} style={{ padding: 4 }}>
+                    {showConfirmPassword ? (
+                      <EyeOff size={18} color={theme.colors.textMuted} />
+                    ) : (
+                      <Eye size={18} color={theme.colors.textMuted} />
+                    )}
+                  </Pressable>
+                }
               />
             )}
           />
@@ -204,11 +311,14 @@ export const RegisterScreen = () => {
             name="address"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Service Address"
+                label="Service Address *"
                 placeholder="Enter complete address detail"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (errors.address) clearErrors("address");
+                }}
                 error={errors.address?.message}
                 leftIcon={<MapPin size={20} color={theme.colors.textLight} />}
               />
@@ -216,9 +326,10 @@ export const RegisterScreen = () => {
           />
 
           <AppButton
-            title="Register"
-            onPress={handleSubmit(onSubmit)}
+            title={loading ? "Registering..." : "Register"}
+            onPress={handleRegisterPress}
             loading={loading}
+            disabled={loading}
             style={{ marginTop: 16 }}
           />
         </AppCard>
@@ -287,4 +398,5 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
 });
+
 export default RegisterScreen;

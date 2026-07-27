@@ -68,6 +68,7 @@ import { AppLoader } from "../../components/AppLoader";
 import { CustomerPopup } from "../../components/CustomerPopup";
 import { AMCServiceModal } from "../../components/amc/AMCServiceModal";
 import { AMCBadge } from "../../components/amc/AMCBadge";
+import { isMeaningfulDescription } from "../../utils/textUtils";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "RaiseTicket">;
 
@@ -506,7 +507,9 @@ export const RaiseTicketScreen = () => {
       if (!selectedCat) newErrors.category = "Category is required";
       if (!selectedSub) newErrors.subCategory = "Sub Category is required";
     }
-    if (!description.trim()) newErrors.description = "Description is required";
+    if (!description.trim() || !isMeaningfulDescription(description)) {
+      newErrors.description = "Please enter a meaningful problem description.";
+    }
     // Date validation only applies to SCHEDULED visits
     if (visitType === "SCHEDULED") {
       if (!preferredDate || !preferredTimeSlot) {
@@ -705,7 +708,10 @@ export const RaiseTicketScreen = () => {
     setErrors(newErrors);
 
     if (Object.keys(newErrors).length > 0) {
-      triggerPopup("danger", "Validation Error", "Please fill in all mandatory fields before submitting.");
+      const popupMsg = newErrors.description || Object.values(newErrors)[0] || "Please fill in all mandatory fields before submitting.";
+      console.log("[RaiseTicketScreen] Validation FAILED:", newErrors);
+      console.log("[RaiseTicketScreen] API Call: NOT CALLED (Blocked by Validation)");
+      triggerPopup("danger", "Validation Error", popupMsg);
       return;
     }
 

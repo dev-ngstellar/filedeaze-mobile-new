@@ -51,23 +51,49 @@ export const OtpVerificationScreen = () => {
 
   const {
     control,
-    handleSubmit,
+    getValues,
+    setError: setFormError,
+    clearErrors,
     formState: { errors },
   } = useForm<OtpInput>({
     resolver: zodResolver(otpSchema),
+    mode: "onChange",
     defaultValues: {
       otp: "",
     },
   });
 
-  const onSubmit = async (data: OtpInput) => {
+  const handleVerifyOtp = async () => {
     if (loading) return;
-    setLoading(true);
     setError(null);
+
+    const values = getValues();
+    const rawOtp = values.otp || "";
+    const cleanOtp = rawOtp.trim();
+
+    let validationError = "";
+
+    if (!cleanOtp) {
+      validationError = "OTP is required.";
+    } else if (!/^\d+$/.test(cleanOtp)) {
+      validationError = "OTP must contain only numbers.";
+    } else if (cleanOtp.length !== 6) {
+      validationError = "OTP must be 6 digits.";
+    }
+
+    if (validationError) {
+      setFormError("otp", { type: "manual", message: validationError });
+      setError(validationError);
+      Alert.alert("Validation Error", validationError);
+      return;
+    }
+
+    clearErrors("otp");
+    setLoading(true);
+
     try {
       if (mode === "register") {
-        const loginRes = await AuthService.verifyOtp(email, data.otp, tenantId);
-        // Save address using the token returned by the verification endpoint
+        const loginRes = await AuthService.verifyOtp(email, cleanOtp, tenantId);
         if (address) {
           try {
             await apiClient.post(
@@ -88,7 +114,6 @@ export const OtpVerificationScreen = () => {
           }
         }
 
-        // Save authentication credentials in the Zustand store to trigger dashboard navigation
         const userProfile = {
           id: loginRes.user.id,
           name: loginRes.user.name,
@@ -108,13 +133,15 @@ export const OtpVerificationScreen = () => {
 
         setLoading(false);
       } else {
-        const res = await AuthService.verifyForgotPasswordOtp(email, data.otp);
+        const res = await AuthService.verifyForgotPasswordOtp(email, cleanOtp);
         setLoading(false);
         navigation.navigate("ResetPassword", { email, token: res.resetToken });
       }
     } catch (err: any) {
       setLoading(false);
-      setError(err?.message || "Invalid OTP code. Please check and try again.");
+      const backendErrorMsg = "Invalid OTP. Please enter the correct verification code.";
+      setError(backendErrorMsg);
+      setFormError("otp", { type: "manual", message: backendErrorMsg });
     }
   };
 
@@ -180,22 +207,28 @@ export const OtpVerificationScreen = () => {
             name="otp"
             render={({ field: { onChange, onBlur, value } }) => (
               <AppInput
-                label="Verification Code (OTP)"
+                label="Verification Code (OTP) *"
                 placeholder="Enter 6-digit code"
                 value={value}
                 onBlur={onBlur}
-                onChangeText={onChange}
-                error={errors.otp?.message}
+                onChangeText={(val) => {
+                  onChange(val);
+                  if (errors.otp) clearErrors("otp");
+                  if (error) setError(null);
+                }}
+                error={errors.otp?.message || error || undefined}
                 keyboardType="number-pad"
+                maxLength={6}
                 leftIcon={<KeyRound size={20} color={theme.colors.textLight} />}
               />
             )}
           />
 
           <AppButton
-            title="Verify Code"
-            onPress={handleSubmit(onSubmit)}
+            title={loading ? "Verifying..." : "Verify Code"}
+            onPress={handleVerifyOtp}
             loading={loading}
+            disabled={loading}
             style={{ marginTop: 16 }}
           />
 
@@ -293,9 +326,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 18,
   },
-  helpBox: {
-    marginTop: 20,
-    alignItems: "center",
-  },
 });
+
 export default OtpVerificationScreen;

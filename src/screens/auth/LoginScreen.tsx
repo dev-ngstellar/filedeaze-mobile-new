@@ -80,27 +80,42 @@ export const LoginScreen = () => {
   };
 
   const onPressSignIn = async () => {
-    await trigger();
+    if (isLoading) return;
     const currentValues = getValues();
+    const cleanEmail = (currentValues.email || "").trim();
+    const cleanPassword = currentValues.password || "";
 
-    if (!currentValues.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(currentValues.email)) {
-      setValidationPopupMsg("Please enter a valid email address to continue.");
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+      setValidationPopupMsg("Please enter a valid email address.");
       setValidationPopupVisible(true);
+      trigger("email");
       return;
     }
 
-    if (!currentValues.password) {
-      setValidationPopupMsg("Please enter your password.");
+    if (!cleanPassword) {
+      setValidationPopupMsg("Password is required.");
       setValidationPopupVisible(true);
+      trigger("password");
       return;
     }
 
     try {
-      await login(currentValues.email, currentValues.password);
+      await login(cleanEmail, cleanPassword);
     } catch (err: any) {
-      const msg = err?.message || "Login failed.";
-      const isWrongPassword = /password|credential|invalid|incorrect|wrong/i.test(msg);
-      setValidationPopupMsg(isWrongPassword ? "Wrong Password. Please try again." : msg);
+      const status = err?.status || err?.response?.status;
+      const msg = (err?.message || "").toLowerCase();
+
+      let friendlyMsg = "Something went wrong.";
+      if (status === 401 || msg.includes("invalid") || msg.includes("credential") || msg.includes("password") || msg.includes("unauthorized")) {
+        friendlyMsg = "Invalid email or password.";
+      } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("connect") || msg.includes("econnrefused") || status === 0) {
+        friendlyMsg = "Unable to connect. Please try again.";
+      } else if (status >= 500) {
+        friendlyMsg = "Something went wrong.";
+      }
+
+      setValidationPopupMsg(friendlyMsg);
       setValidationPopupVisible(true);
     }
   };

@@ -167,16 +167,49 @@ export const CustomerHomeScreen = () => {
     return () => clearInterval(timer);
   }, [categories.length]);
 
+  const [profileErrors, setProfileErrors] = useState<Record<string, string>>({});
+
   const handleSaveProfile = () => {
+    if (updateProfileMutation.isPending) return;
+
+    const errs: Record<string, string> = {};
+    const cleanName = name.trim();
+    const cleanPhone = phone.trim();
+    const cleanAltPhone = alternatePhone.trim();
+    const cleanPincode = pincode.trim();
+    const cleanAddress = address.trim();
+
+    if (!cleanName || cleanName.length < 2) {
+      errs.name = "Name must be at least 2 characters.";
+    }
+    if (!cleanPhone || !/^\d{10}$/.test(cleanPhone)) {
+      errs.phone = "Phone number must be 10 digits.";
+    }
+    if (cleanAltPhone && (!/^\d+$/.test(cleanAltPhone) || cleanAltPhone.length !== 10)) {
+      errs.alternatePhone = "Please enter a valid 10-digit alternate phone number.";
+    }
+    if (!cleanPincode || !/^\d{6}$/.test(cleanPincode)) {
+      errs.pincode = "Pincode must be 6 digits.";
+    }
+    if (!cleanAddress) {
+      errs.address = "Address is required.";
+    }
+
+    if (Object.keys(errs).length > 0) {
+      setProfileErrors(errs);
+      Alert.alert("Validation Error", Object.values(errs)[0]);
+      return;
+    }
+    setProfileErrors({});
+
     updateProfileMutation.mutate(
       {
-        name,
-        email: email || null,
-        phone,
-        alternatePhone: alternatePhone || null,
-        address: address || null,
-        city: city || null,
-        pincode: pincode || null,
+        name: cleanName,
+        phone: cleanPhone,
+        alternatePhone: cleanAltPhone || null,
+        address: cleanAddress,
+        city: city.trim() || null,
+        pincode: cleanPincode,
       },
       {
         onSuccess: () => {
@@ -1247,73 +1280,53 @@ export const CustomerHomeScreen = () => {
                   </Pressable>
                 </View>
 
-                <View style={{ alignItems: "center", marginBottom: 24 }}>
-                  <View style={[styles.avatarCircleLg, { backgroundColor: `${theme.colors.primary}15` }]}>
-                    {(profile?.profileImageUrl || user?.avatar) ? (
-                      <Image
-                        source={{ uri: profile?.profileImageUrl || user?.avatar }}
-                        style={styles.avatarImageLg}
-                      />
-                    ) : (
-                      <User color={theme.colors.primary} size={40} />
-                    )}
-                  </View>
-                  {isEditingProfile && (
-                    <TouchableOpacity
-                      style={[styles.editPhotoBtn, { backgroundColor: theme.colors.primary }]}
-                      onPress={handlePickPhoto}
-                      disabled={uploadPhotoMutation.isPending}
-                    >
-                      <Edit2 size={12} color="#fff" />
-                      <Text style={{ color: "#fff", fontSize: 12, marginLeft: 4, fontWeight: "600" }}>
-                        {uploadPhotoMutation.isPending ? "Uploading..." : "Change Photo"}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
                 <AppInput
-                  label="Name"
+                  label="Name *"
                   value={name}
                   onChangeText={setName}
                   placeholder="Enter your name"
                   editable={isEditingProfile}
+                  error={profileErrors.name}
                   leftIcon={<User size={16} color={theme.colors.textMuted} />}
                   style={!isEditingProfile && { opacity: 0.7 }}
                 />
 
                 <AppInput
-                  label="Email Address"
+                  label="Registered Email"
                   value={email}
                   onChangeText={setEmail}
                   placeholder="Enter email address"
                   keyboardType="email-address"
                   autoCapitalize="none"
-                  editable={isEditingProfile}
+                  editable={false}
                   leftIcon={<Mail size={16} color={theme.colors.textMuted} />}
-                  style={!isEditingProfile && { opacity: 0.7 }}
+                  style={{ opacity: 0.6 }}
                 />
 
                 <AppInput
-                  label="Primary Phone"
+                  label="Primary Phone *"
                   value={phone}
-                  onChangeText={setPhone}
-                  placeholder="Enter mobile phone number"
+                  onChangeText={(val) => setPhone(val.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="10-digit mobile phone number"
                   keyboardType="phone-pad"
-                  editable={false}
+                  maxLength={10}
+                  editable={isEditingProfile}
+                  error={profileErrors.phone}
                   leftIcon={
                     <Smartphone size={16} color={theme.colors.textMuted} />
                   }
-                  style={{ opacity: 0.6 }}
+                  style={!isEditingProfile && { opacity: 0.7 }}
                 />
 
                 <AppInput
                   label="Alternate Phone"
                   value={alternatePhone}
-                  onChangeText={setAlternatePhone}
-                  placeholder="Enter alternate phone number"
+                  onChangeText={(val) => setAlternatePhone(val.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="Enter 10-digit alternate phone number"
                   keyboardType="phone-pad"
+                  maxLength={10}
                   editable={isEditingProfile}
+                  error={profileErrors.alternatePhone}
                   leftIcon={<Phone size={16} color={theme.colors.textMuted} />}
                   style={!isEditingProfile && { opacity: 0.7 }}
                 />
@@ -1338,11 +1351,12 @@ export const CustomerHomeScreen = () => {
                 </Text>
 
                 <AppInput
-                  label="Address"
+                  label="Address *"
                   value={address}
                   onChangeText={setAddress}
                   placeholder="Enter street address"
                   editable={isEditingProfile}
+                  error={profileErrors.address}
                   leftIcon={<MapPin size={16} color={theme.colors.textMuted} />}
                   style={!isEditingProfile && { opacity: 0.7 }}
                 />
@@ -1358,12 +1372,14 @@ export const CustomerHomeScreen = () => {
                 />
 
                 <AppInput
-                  label="Pincode"
+                  label="Pincode *"
                   value={pincode}
-                  onChangeText={setPincode}
-                  placeholder="Enter pincode"
-                  keyboardType="numeric"
+                  onChangeText={(val) => setPincode(val.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="6-digit pincode"
+                  keyboardType="number-pad"
+                  maxLength={6}
                   editable={isEditingProfile}
+                  error={profileErrors.pincode}
                   leftIcon={<Hash size={16} color={theme.colors.textMuted} />}
                   style={!isEditingProfile && { opacity: 0.7 }}
                 />
