@@ -235,7 +235,19 @@ export function useRescheduleJob() {
 export function useAttendanceStatus() {
   return useQuery({
     queryKey: jobQueryKeys.attendance(),
-    queryFn: () => JobService.getAttendanceStatus(),
+    queryFn: async () => {
+      console.log("=== TRACE STEP 3: useAttendanceStatus queryFn START ===");
+      const attendanceStatus = await JobService.getAttendanceStatus();
+      console.log("=== TRACE STEP 3: useAttendanceStatus queryFn RESULT ===");
+      console.log("Hook Object:", JSON.stringify(attendanceStatus, null, 2));
+      console.log("Hook Values:", {
+        checkInLocation: (attendanceStatus as any)?.checkInLocation,
+        location: (attendanceStatus as any)?.location,
+        checkInRemarks: (attendanceStatus as any)?.checkInRemarks,
+        remarks: (attendanceStatus as any)?.remarks,
+      });
+      return attendanceStatus;
+    },
     staleTime: 30_000,
   });
 }
@@ -261,7 +273,17 @@ export function useCheckIn() {
       latitude?: number;
       longitude?: number;
     }) => JobService.checkIn(location, latitude, longitude),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log("=== TRACE: useCheckIn onSuccess ===");
+      console.log("Mutated CheckIn Return Object:", JSON.stringify(data, null, 2));
+      console.log("Mutated CheckIn Values:", {
+        checkInLocation: (data as any)?.checkInLocation,
+        location: (data as any)?.location,
+        checkInRemarks: (data as any)?.checkInRemarks,
+        remarks: (data as any)?.remarks,
+      });
+      // Directly populate React Query cache with the fresh check-in object
+      queryClient.setQueryData(jobQueryKeys.attendance(), data);
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendance() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendanceHistory() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });

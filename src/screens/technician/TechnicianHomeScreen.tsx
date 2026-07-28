@@ -37,7 +37,9 @@ import { useTheme } from "../../theme";
 import { useAuthStore } from "../../store/auth.store";
 import { useTechnicianJobs, useTechnicianInvoices, useAttendanceStatus, useCheckIn, useCheckOut } from "../../hooks/useJobs";
 import { useUnreadNotificationCount } from "../../hooks/useNotifications";
+import * as Location from "expo-location";
 import { TicketStatus } from "../../services/job.service";
+import { getFreshLocationForAttendance } from "../../utils/location";
 import { TechnicianStackParamList } from "../../types/navigation.types";
 import { AppLoader } from "../../components/AppLoader";
 import { AppEmptyState } from "../../components/AppEmptyState";
@@ -76,7 +78,7 @@ export const TechnicianHomeScreen = () => {
   const unreadNotifCount = useUnreadNotificationCount();
 
   const [locationModalVisible, setLocationModalVisible] = useState(false);
-  const [locationInput, setLocationInput] = useState("Main Office HQ, Sector 62");
+  const [locationInput, setLocationInput] = useState("");
   const [checkoutModalVisible, setCheckoutModalVisible] = useState(false);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
 
@@ -87,6 +89,19 @@ export const TechnicianHomeScreen = () => {
   const [elapsedHours, setElapsedHours] = useState("0h 00m 00s");
 
   useEffect(() => {
+    if (attendance) {
+      console.log("=== TRACE STEP 4: TechnicianHomeScreen attendance state ===");
+      console.log("HomeScreen Object:", JSON.stringify(attendance, null, 2));
+      console.log("HomeScreen Values:", {
+        checkInLocation: (attendance as any)?.checkInLocation,
+        location: (attendance as any)?.location,
+        checkInRemarks: (attendance as any)?.checkInRemarks,
+        remarks: (attendance as any)?.remarks,
+      });
+      console.log("=== TRACE STEP 5: UI Render Value ===");
+      console.log("UI render value for Physical Location:", (attendance as any)?.checkInLocation);
+    }
+
     let intervalId: any;
 
     const updateTimer = () => {
@@ -120,7 +135,7 @@ export const TechnicianHomeScreen = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [attendance?.checkedIn, attendance?.rawCheckInTime]);
+  }, [attendance?.checkedIn, attendance?.rawCheckInTime, attendance]);
 
   const getMonthsList = () => {
     const list = [];
@@ -214,17 +229,45 @@ export const TechnicianHomeScreen = () => {
     setLocationModalVisible(true);
   };
 
+  const [isSubmittingAttendance, setIsSubmittingAttendance] = useState(false);
+
   const handleCheckInSubmit = async () => {
+    if (isSubmittingAttendance || checkInMutation.isPending) return;
     if (attendance?.shiftCompleted) {
       Alert.alert("Shift Completed", "Your shift for today has already been completed.");
       return;
     }
-    if (!locationInput.trim()) {
-      Alert.alert("Required", "Please enter your check-in location.");
-      return;
-    }
+    setIsSubmittingAttendance(true);
     try {
-      await checkInMutation.mutateAsync({ location: locationInput });
+      const coords = await getFreshLocationForAttendance();
+
+      let finalLocation = locationInput.trim();
+      if (!finalLocation) {
+        try {
+          const geocoded = await Location.reverseGeocodeAsync({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          });
+          if (geocoded && geocoded.length > 0) {
+            const p = geocoded[0];
+            const parts = [p.name, p.street, p.subregion || p.district, p.city, p.region].filter(Boolean);
+            const uniqueParts = Array.from(new Set(parts));
+            finalLocation = uniqueParts.join(", ");
+          }
+        } catch {
+          // Reverse geocoding fallback
+        }
+      }
+
+      if (!finalLocation) {
+        finalLocation = `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`;
+      }
+
+      await checkInMutation.mutateAsync({
+        location: finalLocation,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
       setLocationModalVisible(false);
       setLocationInput("");
       setSuccessTitle("Success");
@@ -232,6 +275,8 @@ export const TechnicianHomeScreen = () => {
       setSuccessModalVisible(true);
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to check in.");
+    } finally {
+      setIsSubmittingAttendance(false);
     }
   };
 
@@ -257,9 +302,15 @@ export const TechnicianHomeScreen = () => {
   };
 
   const handleConfirmCheckOut = async () => {
+    if (isSubmittingAttendance || checkOutMutation.isPending) return;
     setCheckoutModalVisible(false);
+    setIsSubmittingAttendance(true);
     try {
-      const res: any = await checkOutMutation.mutateAsync({});
+      const coords = await getFreshLocationForAttendance();
+      const res: any = await checkOutMutation.mutateAsync({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
       
       // Calculate working hours from backend response data
       let workingHoursStr = "N/A";
@@ -277,6 +328,8 @@ export const TechnicianHomeScreen = () => {
       setSuccessModalVisible(true);
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to check out.");
+    } finally {
+      setIsSubmittingAttendance(false);
     }
   };
 
@@ -484,7 +537,7 @@ export const TechnicianHomeScreen = () => {
                   <View style={styles.sessionDetails}>
                     <Text style={styles.sessionLabel}>Physical Location</Text>
                     <Text style={[styles.sessionValue, { color: theme.colors.text }]} numberOfLines={1}>
-                      {attendance.checkInLocation}
+                      {attendance.checkInLocation || "Location unavailable"}
                     </Text>
                   </View>
                 </View>

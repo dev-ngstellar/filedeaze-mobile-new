@@ -597,31 +597,80 @@ export const TechnicianJobDetailsScreen = () => {
 
   // BEFORE PHOTOS & START JOB HANDLERS
   const pickBeforeFromCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      showAlert("Permission Needed", "Camera access is required.");
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
-    if (!result.canceled && result.assets[0]) {
-      setBeforePhotos((prev) => [...prev, result.assets[0].uri]);
+    try {
+      console.log("=== TRACE: pickBeforeFromCamera START ===");
+      let hasCameraPerm = false;
+      try {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        console.log("Camera permission status:", status);
+        hasCameraPerm = status === "granted";
+      } catch (e) {
+        console.warn("requestCameraPermissionsAsync failed:", e);
+      }
+
+      if (hasCameraPerm) {
+        try {
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            quality: 0.5,
+          });
+          console.log("Camera result:", JSON.stringify(result, null, 2));
+          if (!result.canceled && result.assets && result.assets.length > 0) {
+            const validUris = result.assets.map((a) => a.uri).filter(Boolean);
+            console.log("Selected camera URIs:", validUris);
+            setBeforePhotos((prev) => [...prev, ...validUris]);
+            return;
+          }
+        } catch (camErr) {
+          console.warn("launchCameraAsync failed, attempting gallery fallback:", camErr);
+        }
+      }
+
+      // Fallback: Launch gallery if camera permission was denied or camera capture failed
+      const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (libStatus !== "granted") {
+        showAlert("Permission Needed", "Camera or Gallery access is required to capture site photos.");
+        return;
+      }
+      const libResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.5,
+      });
+      if (!libResult.canceled && libResult.assets && libResult.assets.length > 0) {
+        const validUris = libResult.assets.map((a) => a.uri).filter(Boolean);
+        console.log("Selected fallback URIs:", validUris);
+        setBeforePhotos((prev) => [...prev, ...validUris]);
+      }
+    } catch (err: any) {
+      console.error("=== ERROR in pickBeforeFromCamera ===", err);
+      showAlert("Photo Capture Error", err.message || "Failed to capture or pick photo.");
     }
   };
 
   const pickBeforeFromGallery = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      showAlert("Permission Needed", "Library access is required.");
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: "images",
-      quality: 0.7,
-      allowsMultipleSelection: true,
-      selectionLimit: 5,
-    });
-    if (!result.canceled && result.assets.length > 0) {
-      setBeforePhotos((prev) => [...prev, ...result.assets.map((a) => a.uri)]);
+    try {
+      console.log("=== TRACE: pickBeforeFromGallery START ===");
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      console.log("Media library permission status:", status);
+      if (status !== "granted") {
+        showAlert("Permission Needed", "Library access is required.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.5,
+        allowsMultipleSelection: true,
+        selectionLimit: 5,
+      });
+      console.log("Gallery result:", JSON.stringify(result, null, 2));
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const validUris = result.assets.map((a) => a.uri).filter(Boolean);
+        console.log("Selected gallery URIs:", validUris);
+        setBeforePhotos((prev) => [...prev, ...validUris]);
+      }
+    } catch (err: any) {
+      console.error("=== ERROR in pickBeforeFromGallery ===", err);
+      showAlert("Gallery Error", err.message || "Failed to pick images.");
     }
   };
 
@@ -631,7 +680,10 @@ export const TechnicianJobDetailsScreen = () => {
 
   const startJobMutationCall = async () => {
     try {
+      console.log("=== TRACE: startJobMutationCall START ===");
+      console.log("Job ID:", jobId, "Before Photos count:", beforePhotos.length);
       await savePhotosMutation.mutateAsync({ ticketNo: jobId, photos: beforePhotos });
+      console.log("=== TRACE: startJobMutationCall SUCCESS ===");
       setStartJobFormVisible(false);
       queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
       queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
@@ -642,6 +694,7 @@ export const TechnicianJobDetailsScreen = () => {
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
+      console.error("=== ERROR in startJobMutationCall ===", err);
       showAlert("Error", err.message || "Failed to start job.");
     }
   };
@@ -664,25 +717,31 @@ export const TechnicianJobDetailsScreen = () => {
 
   // PENDING EVIDENCE PHOTOS HANDLERS
   const pickPendingPhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (libStatus !== "granted") {
-        showAlert("Permission Needed", "Library access is required.");
+    try {
+      console.log("=== TRACE: pickPendingPhoto START ===");
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (libStatus !== "granted") {
+          showAlert("Permission Needed", "Library access is required.");
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          quality: 0.7,
+        });
+        if (!result.canceled && result.assets && result.assets[0]?.uri) {
+          setPendingPhotos((p) => [...p, result.assets[0].uri]);
+        }
         return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: "images",
-        quality: 0.7,
-      });
-      if (!result.canceled && result.assets[0]) {
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
         setPendingPhotos((p) => [...p, result.assets[0].uri]);
       }
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
-    if (!result.canceled && result.assets[0]) {
-      setPendingPhotos((p) => [...p, result.assets[0].uri]);
+    } catch (err: any) {
+      console.error("=== ERROR in pickPendingPhoto ===", err);
+      showAlert("Error", err.message || "Failed to capture pending photo.");
     }
   };
 
@@ -692,31 +751,64 @@ export const TechnicianJobDetailsScreen = () => {
 
   // AFTER PHOTOS HANDLERS
   const pickAfterFromCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      showAlert("Permission Denied", "Camera access is required.");
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-    if (!result.canceled && result.assets[0]) {
-      setAfterPhotos((p) => [...p, result.assets[0].uri]);
+    try {
+      console.log("=== TRACE: pickAfterFromCamera START ===");
+      let hasCameraPerm = false;
+      try {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        hasCameraPerm = status === "granted";
+      } catch (e) {}
+
+      if (hasCameraPerm) {
+        try {
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            quality: 0.8,
+          });
+          if (!result.canceled && result.assets && result.assets[0]?.uri) {
+            setAfterPhotos((p) => [...p, result.assets[0].uri]);
+            return;
+          }
+        } catch (camErr) {}
+      }
+
+      const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (libStatus === "granted") {
+        const libResult = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          quality: 0.8,
+        });
+        if (!libResult.canceled && libResult.assets && libResult.assets[0]?.uri) {
+          setAfterPhotos((p) => [...p, libResult.assets[0].uri]);
+        }
+      }
+    } catch (err: any) {
+      console.error("=== ERROR in pickAfterFromCamera ===", err);
+      showAlert("Error", err.message || "Failed to capture photo.");
     }
   };
 
   const pickAfterFromGallery = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      showAlert("Permission Denied", "Library access is required.");
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: "images",
-      quality: 0.8,
-      allowsMultipleSelection: true,
-      selectionLimit: 5,
-    });
-    if (!result.canceled && result.assets.length > 0) {
-      setAfterPhotos((p) => [...p, ...result.assets.map((a) => a.uri)]);
+    try {
+      console.log("=== TRACE: pickAfterFromGallery START ===");
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        showAlert("Permission Denied", "Library access is required.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+        allowsMultipleSelection: true,
+        selectionLimit: 5,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const validUris = result.assets.map((a) => a.uri).filter(Boolean);
+        setAfterPhotos((p) => [...p, ...validUris]);
+      }
+    } catch (err: any) {
+      console.error("=== ERROR in pickAfterFromGallery ===", err);
+      showAlert("Error", err.message || "Failed to pick photo.");
     }
   };
 

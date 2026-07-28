@@ -22,6 +22,7 @@ import { Shield, Mail, Lock, Eye, EyeOff } from "lucide-react-native";
 import { useTheme } from "../../theme";
 import { useAuthStore } from "../../store/auth.store";
 import { APP_CONFIG } from "../../config/app.config";
+import { getFriendlyAuthErrorMessage } from "../../utils";
 import { customerLoginSchema, CustomerLoginInput } from "../../validation/auth.validation";
 import { AuthStackParamList } from "../../types/navigation.types";
 import { AppInput } from "../../components/AppInput";
@@ -103,18 +104,7 @@ export const LoginScreen = () => {
     try {
       await login(cleanEmail, cleanPassword);
     } catch (err: any) {
-      const status = err?.status || err?.response?.status;
-      const msg = (err?.message || "").toLowerCase();
-
-      let friendlyMsg = "Something went wrong.";
-      if (status === 401 || msg.includes("invalid") || msg.includes("credential") || msg.includes("password") || msg.includes("unauthorized")) {
-        friendlyMsg = "Invalid email or password.";
-      } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("connect") || msg.includes("econnrefused") || status === 0) {
-        friendlyMsg = "Unable to connect. Please try again.";
-      } else if (status >= 500) {
-        friendlyMsg = "Something went wrong.";
-      }
-
+      const friendlyMsg = getFriendlyAuthErrorMessage(err);
       setValidationPopupMsg(friendlyMsg);
       setValidationPopupVisible(true);
     }

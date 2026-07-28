@@ -348,51 +348,79 @@ function normalizeAttendanceLog(raw: any): AttendanceLog {
     ? new Date(raw.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : undefined;
 
+  const checkInLocation =
+    raw.checkInLocation ??
+    raw.location ??
+    raw.locationName ??
+    raw.address ??
+    raw.checkInRemarks ??
+    raw.remarks ??
+    "Location unavailable";
+
   return {
     checkedIn,
     checkInTime,
-    // Dashboard does not return location — attendance history uses checkInRemarks
-    checkInLocation: raw.checkInLocation ?? raw.checkInRemarks ?? raw.location ?? undefined,
+    checkInLocation,
     checkOutTime,
     workingHours: raw.workingHours ?? undefined,
     completedTickets: raw.completedTickets ?? undefined,
   };
 }
 
-function normalizeAttendanceRecord(raw: any): AttendanceRecord {
-  // Attendance API fields: checkInTime (ISO), checkOutTime (ISO|null), checkInRemarks, date (ISO)
+function normalizeAttendanceRecord(raw: any): any {
+  console.log("=== TRACE STEP 2: normalizeAttendanceRecord START ===");
+  console.log("Raw input object:", JSON.stringify(raw, null, 2));
+  console.log("Extracted raw values:", {
+    checkInLocation: raw?.checkInLocation ?? raw?.data?.checkInLocation,
+    location: raw?.location ?? raw?.data?.location,
+    checkInRemarks: raw?.checkInRemarks ?? raw?.data?.checkInRemarks,
+    remarks: raw?.remarks ?? raw?.data?.remarks,
+  });
 
-  const checkInTime: string | undefined = raw.checkInTime
-    ? new Date(raw.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
+  if (!raw) {
+    const emptyLog = {
+      id: "",
+      date: "",
+      checkedIn: false,
+      checkInLocation: "Location unavailable",
+      location: "Location unavailable",
+      status: "ABSENT",
+    };
+    console.log("=== TRACE STEP 2: normalizeAttendanceRecord END (empty) ===", emptyLog);
+    return emptyLog;
+  }
+
+  const rawData = raw?.data || raw;
+  const att = rawData.attendance || rawData.todayAttendance || rawData.checkIn || rawData;
+
+  const checkInTime: string | undefined = att.checkInTime
+    ? new Date(att.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
     : undefined;
 
-  const checkOutTime: string | undefined = raw.checkOutTime
-    ? new Date(raw.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
+  const checkOutTime: string | undefined = att.checkOutTime
+    ? new Date(att.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
     : undefined;
 
-  // Calculate working hours from timestamps
-  let workingHours: string | undefined = raw.workingHours ?? undefined;
-  if (!workingHours && raw.checkInTime && raw.checkOutTime) {
-    const diffMs = new Date(raw.checkOutTime).getTime() - new Date(raw.checkInTime).getTime();
+  let workingHours: string | undefined = att.workingHours ?? rawData.workingHours ?? undefined;
+  if (!workingHours && att.checkInTime && att.checkOutTime) {
+    const diffMs = new Date(att.checkOutTime).getTime() - new Date(att.checkInTime).getTime();
     const totalMins = Math.floor(diffMs / 60000);
     const h = Math.floor(totalMins / 60);
     const m = totalMins % 60;
     workingHours = `${h}h ${String(m).padStart(2, "0")}m`;
   }
 
-  // Derive status from check-in time (after 09:30 IST = LATE, no checkIn = ABSENT)
   let status: "PRESENT" | "ABSENT" | "HALF_DAY" | "LATE" = "PRESENT";
-  if (!raw.checkInTime) {
+  if (!att.checkInTime) {
     status = "ABSENT";
   } else {
-    // Formatter to extract local hour/minute in IST
     const formatter = new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "numeric",
       hour12: false,
       timeZone: "Asia/Kolkata",
     });
-    const formattedParts = formatter.formatToParts(new Date(raw.checkInTime));
+    const formattedParts = formatter.formatToParts(new Date(att.checkInTime));
     const hourPart = formattedParts.find((p) => p.type === "hour")?.value;
     const minPart = formattedParts.find((p) => p.type === "minute")?.value;
     const hour = hourPart ? parseInt(hourPart, 10) : 0;
@@ -401,10 +429,8 @@ function normalizeAttendanceRecord(raw: any): AttendanceRecord {
     if (hour > 9 || (hour === 9 && min > 30)) status = "LATE";
   }
 
-  // extract date part in local timezone
-  // extract date part in local timezone from actual check-in time or createdAt to avoid UTC date-only offsets
   let dateStr = "";
-  const baseDate = raw.checkInTime || raw.createdAt || raw.date;
+  const baseDate = att.checkInTime || att.createdAt || att.date || rawData.date;
   if (baseDate) {
     const formatter = new Intl.DateTimeFormat("en-CA", {
       year: "numeric",
@@ -415,15 +441,50 @@ function normalizeAttendanceRecord(raw: any): AttendanceRecord {
     dateStr = formatter.format(new Date(baseDate));
   }
 
-  return {
-    id: raw.id ?? "",
+  // Location mapping fallback hierarchy
+  const checkInLocation =
+    att.checkInLocation ??
+    att.location ??
+    att.locationName ??
+    att.address ??
+    att.checkInRemarks ??
+    att.remarks ??
+    rawData.checkInLocation ??
+    rawData.location ??
+    rawData.locationName ??
+    rawData.address ??
+    rawData.checkInRemarks ??
+    rawData.remarks ??
+    "Location unavailable";
+
+  const hasCheckedIn = Boolean(att.checkInTime || att.isCheckedIn || att.checkedIn || rawData.isCheckedIn || rawData.checkedIn);
+  const hasCheckedOut = Boolean(att.checkOutTime || rawData.checkOutTime);
+
+  const normalized = {
+    id: att.id ?? rawData.id ?? "",
     date: dateStr,
+    checkedIn: hasCheckedIn && !hasCheckedOut,
     checkInTime,
     checkOutTime,
     workingHours,
-    location: raw.checkInRemarks ?? raw.location ?? raw.checkInLocation ?? undefined,
+    checkInLocation,
+    location: checkInLocation,
     status,
+    shiftCompleted: hasCheckedIn && hasCheckedOut,
+    rawCheckInTime: att.checkInTime ?? rawData.checkInTime ?? undefined,
+    completedTickets: att.completedTickets ?? rawData.completedTickets ?? undefined,
   };
+
+  console.log("=== TRACE STEP 2: normalizeAttendanceRecord OUTPUT ===");
+  console.log("Normalized Object:", JSON.stringify(normalized, null, 2));
+  console.log("Key properties:", {
+    checkInLocation: normalized.checkInLocation,
+    location: normalized.location,
+    checkInRemarks: att.checkInRemarks ?? rawData.checkInRemarks,
+    remarks: att.remarks ?? rawData.remarks,
+  });
+
+  return normalized;
 }
 
 const BASE = "/mobile/technician";
@@ -490,6 +551,75 @@ export class JobService {
     return res.data;
   }
 
+  static async compressImageFrontend(
+    imageUri: string,
+    maxWidth = 1024,
+    quality = 0.5
+  ): Promise<string> {
+    if (!imageUri) return imageUri;
+
+    // Web Browser Environment (blob:, data:, http:)
+    if (
+      typeof window !== "undefined" &&
+      typeof document !== "undefined" &&
+      (imageUri.startsWith("blob:") || imageUri.startsWith("data:") || imageUri.startsWith("http"))
+    ) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            let width = img.width;
+            let height = img.height;
+
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              const compressedDataUrl = canvas.toDataURL("image/jpeg", quality);
+              console.log(`[Web Compressor] Original ${img.width}x${img.height} -> Compressed ${width}x${height}`);
+              resolve(compressedDataUrl);
+              return;
+            }
+          } catch (err) {
+            console.warn("[Web Compressor] Canvas compression error:", err);
+          }
+          resolve(imageUri);
+        };
+        img.onerror = (err) => {
+          console.warn("[Web Compressor] Failed to load image element:", err);
+          resolve(imageUri);
+        };
+        img.src = imageUri;
+      });
+    }
+
+    // Native React Native Environment (file://, content://)
+    try {
+      const result = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: maxWidth } }],
+        { compress: quality, format: SaveFormat.JPEG }
+      );
+      if (result && result.uri) {
+        console.log(`[Native Compressor] Compressed URI: ${result.uri}`);
+        return result.uri;
+      }
+    } catch (err) {
+      console.warn("[Native Compressor] ImageManipulator error:", err);
+    }
+
+    return imageUri;
+  }
+
   /**
    * POST /mobile/technician/tickets/:ticketNo/images
    * Uploads a single image (multipart/form-data).
@@ -500,54 +630,47 @@ export class JobService {
     imageUri: string,
     type: "BEFORE" | "AFTER"
   ): Promise<{ url: string }> {
-    let uploadUri = imageUri;
-    let filename = `ticket_${Date.now()}.jpg`;
-    let mimeType = "image/jpeg";
+    console.log("=== TRACE: uploadTicketImage START ===");
+    console.log("ticketNo:", ticketNo, "type:", type, "imageUri:", imageUri);
+
+    const filename = `ticket_${Date.now()}.jpg`;
+    const mimeType = "image/jpeg";
+
+    // 1. Compress image on the frontend (HTML5 Canvas on Web or ImageManipulator on Native)
+    const compressedUri = await JobService.compressImageFrontend(imageUri, 1024, 0.5);
+
+    // 2. Construct FormData payload safely for both Web & Native
+    const formData = new FormData();
+    if (typeof window !== "undefined" && compressedUri.startsWith("data:")) {
+      const fetchRes = await fetch(compressedUri);
+      const blob = await fetchRes.blob();
+      formData.append("file", blob, filename);
+    } else {
+      formData.append("file", {
+        uri: compressedUri,
+        name: filename,
+        type: mimeType,
+      } as any);
+    }
 
     try {
-      // New context-based API (the old manipulateAsync shim is deprecated and has been observed to
-      // leak native image memory under SDK 54, causing the app to crash and reload after a few uploads).
-      const context = ImageManipulator.manipulate(imageUri);
-      context.resize({ width: 1280 });
-      const rendered = await context.renderAsync();
-      const result = await rendered.saveAsync({ compress: 0.6, format: SaveFormat.JPEG });
-      uploadUri = result.uri;
-    } catch (error) {
-      console.error("Failed to compress technician image:", error);
+      const response = await apiClient.post(
+        `${BASE}/tickets/${ticketNo}/images?type=${type}`,
+        formData,
+        {
+          transformRequest: (data) => data,
+        }
+      );
+
+      console.log("Upload Ticket Image Response:", response.data);
+      const resJson = response.data?.data || response.data;
+      return {
+        url: resJson?.imageUrl || resJson?.url || "",
+      };
+    } catch (err: any) {
+      console.error("=== ERROR in uploadTicketImage ===", err);
+      throw new Error(err.response?.data?.message || err.message || "Failed to upload image.");
     }
-
-    const formData = new FormData();
-    formData.append("file", {
-      uri: uploadUri,
-      name: filename,
-      type: mimeType,
-    } as any);
-
-    const { token } = useAuthStore.getState();
-    const headers: Record<string, string> = {
-      "x-tenant-code": APP_CONFIG.tenantCode,
-      "Accept": "application/json",
-    };
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(
-      `${APP_CONFIG.apiBaseUrl}${BASE}/tickets/${ticketNo}/images?type=${type}`,
-      {
-        method: "POST",
-        headers,
-        body: formData,
-      }
-    );
-
-    const resJson = await response.json();
-    if (!response.ok) {
-      throw new Error(resJson.message || "Failed to upload image");
-    }
-    return {
-      url: resJson.data?.imageUrl || resJson.imageUrl || "",
-    };
   }
 
   /**
@@ -556,11 +679,16 @@ export class JobService {
    * PATCH /mobile/technician/tickets/:ticketNo/status { status: "IN_PROGRESS" }
    */
   static async saveBeforePhotos(ticketNo: string, photos: string[]): Promise<Ticket> {
-    // Upload each photo sequentially
+    console.log("=== TRACE: saveBeforePhotos START ===");
+    console.log("ticketNo:", ticketNo, "photos:", photos);
+
     for (const uri of photos) {
-      await JobService.uploadTicketImage(ticketNo, uri, "BEFORE");
+      if (uri) {
+        await JobService.uploadTicketImage(ticketNo, uri, "BEFORE");
+      }
     }
-    // Transition status
+
+    console.log("=== TRACE: saveBeforePhotos -> updating status to IN_PROGRESS ===");
     return JobService.updateJobStatus(ticketNo, "IN_PROGRESS");
   }
 
@@ -713,54 +841,47 @@ export class JobService {
    * GET /mobile/technician/attendance/today
    */
   static async getAttendanceStatus(): Promise<AttendanceLog> {
-    const response = await apiClient.get<{
-      success: boolean;
-      data: {
-        isCheckedIn: boolean;
-        checkInTime: string | null;
-        checkOutTime: string | null;
-        completedTickets?: number;
-      };
-    }>("/mobile/technician/dashboard");
+    console.log("=== TRACE STEP 1: getAttendanceStatus START ===");
+    const response = await apiClient.get<any>("/mobile/technician/dashboard");
+    console.log("Dashboard API response object:", JSON.stringify(response.data, null, 2));
 
-    console.log("Technician dashboard attendance response:", response.data);
-    console.log("DASHBOARD ATTENDANCE DATA:", response.data.data);
+    let rawData = response.data?.data || response.data || {};
 
-    const dashboard = response.data.data;
-    const hasCheckedIn = !!dashboard.checkInTime;
-    const hasCheckedOut = !!dashboard.checkOutTime;
+    const hasLoc = Boolean(
+      rawData.checkInLocation ||
+      rawData.location ||
+      rawData.locationName ||
+      rawData.address ||
+      rawData.checkInRemarks ||
+      rawData.remarks
+    );
 
-    let workingHours: string | undefined = undefined;
-    if (dashboard.checkInTime && dashboard.checkOutTime) {
-      const diffMs = new Date(dashboard.checkOutTime).getTime() - new Date(dashboard.checkInTime).getTime();
-      const totalMins = Math.floor(diffMs / 60000);
-      const h = Math.floor(totalMins / 60);
-      const m = totalMins % 60;
-      workingHours = `${h}h ${String(m).padStart(2, "0")}m`;
+    if (!hasLoc) {
+      console.log("Dashboard missing location fields, fetching latest attendance history...");
+      try {
+        const attRes = await apiClient.get<any>(`${BASE}/attendance`);
+        console.log("Attendance history API response:", JSON.stringify(attRes.data, null, 2));
+        const list = Array.isArray(attRes.data) ? attRes.data : attRes.data?.data ?? [];
+        if (list.length > 0) {
+          const latestRecord = list[0];
+          console.log("Merging latest attendance record into dashboard data:", latestRecord);
+          rawData = {
+            ...rawData,
+            ...latestRecord,
+            isCheckedIn: rawData.isCheckedIn ?? true,
+            checkInTime: rawData.checkInTime ?? latestRecord.checkInTime,
+            checkOutTime: rawData.checkOutTime ?? latestRecord.checkOutTime,
+          };
+        }
+      } catch (err) {
+        console.log("Failed to fetch attendance history fallback:", err);
+      }
     }
 
-    return {
-      checkedIn: dashboard.isCheckedIn === true && !hasCheckedOut,
-      checkInTime: dashboard.checkInTime
-        ? new Date(dashboard.checkInTime).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZone: "Asia/Kolkata",
-        })
-        : undefined,
-      checkOutTime: dashboard.checkOutTime
-        ? new Date(dashboard.checkOutTime).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZone: "Asia/Kolkata",
-        })
-        : undefined,
-      checkInLocation: "Main Office HQ, Sector 62",
-      shiftCompleted: hasCheckedIn && hasCheckedOut,
-      rawCheckInTime: dashboard.checkInTime ?? undefined,
-      workingHours,
-      completedTickets: dashboard.completedTickets ?? undefined,
-    };
+    const normalized = normalizeAttendanceRecord(rawData);
+    console.log("=== TRACE STEP 1: getAttendanceStatus END ===");
+    console.log("Returned Object:", JSON.stringify(normalized, null, 2));
+    return normalized;
   }
 
   /**
@@ -787,12 +908,14 @@ export class JobService {
     longitude?: number
   ): Promise<AttendanceLog> {
     console.log("CHECK IN API CALLED ONLY BY BUTTON");
-    const res = await apiClient.post<AttendanceLog>(`${BASE}/attendance/checkin`, {
-      lat: latitude ?? 28.6139,
-      lng: longitude ?? 77.2090,
+    const res = await apiClient.post<any>(`${BASE}/attendance/checkin`, {
+      lat: latitude,
+      lng: longitude,
       remarks: location,
     });
-    return res.data;
+    console.log("STEP 1 - CheckIn API", res.data);
+    const normalized = normalizeAttendanceRecord(res.data?.data || res.data);
+    return normalized;
   }
 
   /**
@@ -801,8 +924,8 @@ export class JobService {
   static async checkOut(latitude?: number, longitude?: number): Promise<AttendanceLog> {
     console.log("CHECK OUT API CALLED ONLY BY BUTTON");
     const res = await apiClient.post<AttendanceLog>(`${BASE}/attendance/checkout`, {
-      lat: latitude ?? 28.6139,
-      lng: longitude ?? 77.2090,
+      lat: latitude,
+      lng: longitude,
     });
     return res.data;
   }

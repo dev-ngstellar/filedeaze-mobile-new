@@ -20,7 +20,7 @@ export const TechnicianNavigator = () => {
   return (
     <ThemeProvider theme={technicianTheme}>
     <Stack.Navigator
-      initialRouteName="PostLoginSplash"
+      initialRouteName="TechnicianHome"
       screenOptions={{
         headerShown: false,
         animation: "slide_from_right",

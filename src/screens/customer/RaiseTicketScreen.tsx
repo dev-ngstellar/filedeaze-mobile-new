@@ -279,10 +279,28 @@ export const RaiseTicketScreen = () => {
     return [line1, line2, line3].filter(Boolean).join("\n");
   };
 
-  // Set default profile address and keep it synced if profile updates
+  // Set default service address (AMC Asset Installation Address vs Customer Profile Address)
   useEffect(() => {
-    if (profile && profile.address) {
-      const profileAddr = {
+    const isAmcAsset = isAmcBooking || fromAMC || selectedAsset?.hasActiveAmc || isAmcRequest;
+    const installationAddrStr = selectedAsset?.installationAddress?.trim();
+
+    if (isAmcAsset && installationAddrStr) {
+      const installationAddr: Address = {
+        id: `installation_${selectedAsset?.id || "default"}`,
+        label: "Installation Address",
+        street: installationAddrStr,
+        city: "",
+        state: "",
+        country: "",
+        postalCode: "",
+        isActive: true,
+      };
+
+      if (!selectedAddress || selectedAddress.id === "profile" || selectedAddress.id.startsWith("installation")) {
+        setSelectedAddress(installationAddr);
+      }
+    } else if (profile && profile.address) {
+      const profileAddr: Address = {
         id: "profile",
         label: "Profile Address",
         street: profile.address,
@@ -293,11 +311,11 @@ export const RaiseTicketScreen = () => {
         isActive: true,
       };
 
-      if (!selectedAddress || selectedAddress.id === "profile") {
+      if (!selectedAddress || selectedAddress.id === "profile" || selectedAddress.id.startsWith("installation")) {
         setSelectedAddress(profileAddr);
       }
     }
-  }, [profile]);
+  }, [selectedAsset, isAmcBooking, fromAMC, isAmcRequest, profile]);
 
   // Subcategories fetched dynamically based on selected Category
   // The catalog endpoint returns { subCategories: [...with serviceCharges] }

@@ -4,6 +4,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import AuthService from "../services/auth.service";
 import { unregisterDeviceToken } from "../services/notificationService";
 
+import { getFriendlyAuthErrorMessage } from "../utils";
+
 export type UserRole = "CUSTOMER" | "TECHNICIAN" | "ADMIN" | "SUPER_ADMIN";
 
 export interface UserProfile {
@@ -73,7 +75,7 @@ export const useAuthStore = create<AuthState>()(
         } catch (err: any) {
           set({
             isLoading: false,
-            error: err?.message || "Invalid credentials.",
+            error: getFriendlyAuthErrorMessage(err),
           });
           throw err;
         }

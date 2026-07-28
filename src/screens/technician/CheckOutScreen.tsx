@@ -13,6 +13,7 @@ import { Clock, LogOut, CheckCircle2 } from "lucide-react-native";
 import { useTheme } from "../../theme";
 import { TechnicianStackParamList } from "../../types/navigation.types";
 import { useCheckOut, useAttendanceStatus } from "../../hooks/useJobs";
+import { getFreshLocationForAttendance } from "../../utils/location";
 import { AppHeader } from "../../components/AppHeader";
 import { AppCard } from "../../components/AppCard";
 import { AppButton } from "../../components/AppButton";
@@ -68,9 +69,17 @@ export const CheckOutScreen = () => {
     return () => clearInterval(intervalId);
   }, [attendance?.rawCheckInTime]);
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const handleCheckOut = async () => {
+    if (isSubmitting || checkOutMutation.isPending) return;
+    setIsSubmitting(true);
     try {
-      const res: any = await checkOutMutation.mutateAsync({});
+      const coords = await getFreshLocationForAttendance();
+      const res: any = await checkOutMutation.mutateAsync({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
       let finalWorkingHours = "N/A";
       const attendanceData = res?.data;
       if (attendanceData?.checkInTime && attendanceData?.checkOutTime) {
@@ -91,6 +100,8 @@ export const CheckOutScreen = () => {
       );
     } catch (err: any) {
       showAlert("Error", err.message || "Failed to check out.", "error");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

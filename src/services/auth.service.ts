@@ -33,12 +33,18 @@ export class AuthService {
 
       const handleFailure = (err: any) => {
         rejectedCount++;
+        const statusCode = err.response?.status || err.status;
         const errorMessage = err.response?.data?.message || err.message;
-        errors.push(errorMessage);
+        errors.push({ status: statusCode, message: errorMessage, originalError: err });
         if (rejectedCount === 2 && !resolved) {
           // Both failed, throw user-friendly error
-          const msg = errors[0] === errors[1] ? errors[0] : `${errors[0]} / ${errors[1]}`;
-          reject(new Error(msg || "Invalid email or password."));
+          const firstErr = errors[0];
+          const secondErr = errors[1];
+          const msg = firstErr.message === secondErr.message ? firstErr.message : `${firstErr.message} / ${secondErr.message}`;
+          const customErr: any = new Error(msg || "Invalid credentials.");
+          customErr.status = firstErr.status || secondErr?.status;
+          customErr.response = firstErr.originalError?.response || secondErr?.originalError?.response;
+          reject(customErr);
         }
       };
 

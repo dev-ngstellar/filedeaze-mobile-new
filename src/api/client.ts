@@ -93,10 +93,12 @@ apiClient.interceptors.response.use(
             } else {
               throw new Error("Invalid refresh response");
             }
-          } catch (refreshErr) {
+          } catch (refreshErr: any) {
             _isRefreshing = false;
             _refreshSubscribers = [];
-            logout();
+            if (refreshErr?.response?.status === 401 || refreshErr?.response?.status === 403) {
+              logout();
+            }
             return Promise.reject(new Error("Your session has expired. Please log in again."));
           }
         }
@@ -110,8 +112,8 @@ apiClient.interceptors.response.use(
 
         return retryOrigRequest;
       } else {
-        logout();
-        return Promise.reject(new Error("Your session has expired. Please log in again."));
+        // No refresh token available
+        return Promise.reject(new Error("Authentication token required."));
       }
     }
 
