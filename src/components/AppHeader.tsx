@@ -1,12 +1,13 @@
 import React from "react";
 import { View, Text, StyleSheet, Pressable, Image, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Bell } from "lucide-react-native";
+import { ArrowLeft, Bell, Shield } from "lucide-react-native";
 import { useTheme } from "../theme";
 import { APP_CONFIG } from "../config/app.config";
 import { useNavigation } from "@react-navigation/native";
 import { useAuthStore } from "../store/auth.store";
 import { useUnreadNotificationCount } from "../hooks/useNotifications";
+import { useCustomerHasActiveAmc } from "../hooks/useCustomer";
 
 interface AppHeaderProps {
   title?: string;
@@ -32,6 +33,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const unreadNotifCount = useUnreadNotificationCount();
+  const { hasActiveAmc } = useCustomerHasActiveAmc();
 
   // Auto-detect navigation so we never need to pass showBack manually on child screens.
   // Wrapped in try/catch because AppHeader is sometimes rendered outside a navigator context.
@@ -55,7 +57,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   const isCustomer = user?.role === "CUSTOMER";
   const currentRouteName = nav?.getCurrentRoute?.()?.name;
-  const showBell = isCustomer && currentRouteName !== "NotificationList" && title !== "Notifications";
+  const showCustomerHeaderActions = isCustomer && currentRouteName !== "NotificationList" && title !== "Notifications";
 
   const handleNotificationPress = () => {
     if (nav) {
@@ -63,18 +65,39 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     }
   };
 
+  const handleAssetsPress = () => {
+    if (nav) {
+      nav.navigate("CustomerAssets");
+    }
+  };
+
   const renderRightAction = () => {
-    if (showBell) {
+    if (showCustomerHeaderActions) {
       return (
         <View style={styles.rightActionRow}>
           <Pressable
-            onPress={handleNotificationPress}
+            onPress={handleAssetsPress}
             style={({ pressed }) => [
-              styles.bellButton,
+              styles.headerIconButton,
               pressed && { opacity: 0.7 },
             ]}
+            accessibilityLabel="My Assets & AMC"
           >
-            <Bell color={theme.colors.text} size={22} />
+            <Shield color={theme.colors.text} size={21} />
+            {hasActiveAmc && (
+              <View style={[styles.activeAmcDot, { backgroundColor: theme.colors.success }]} />
+            )}
+          </Pressable>
+
+          <Pressable
+            onPress={handleNotificationPress}
+            style={({ pressed }) => [
+              styles.headerIconButton,
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityLabel="Notifications"
+          >
+            <Bell color={theme.colors.text} size={21} />
             {unreadNotifCount > 0 && (
               <View style={[styles.notifBadge, { backgroundColor: theme.colors.danger }]}>
                 <Text style={styles.notifBadgeText}>
@@ -191,7 +214,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           )}
         </View>
 
-        {showBell || rightAction ? (
+        {showCustomerHeaderActions || rightAction ? (
           <View style={styles.rightActionContainer}>{renderRightAction()}</View>
         ) : (
           <View style={styles.rightActionPlaceholder} />
@@ -296,6 +319,23 @@ const styles = StyleSheet.create({
     position: "relative",
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    position: "relative",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  activeAmcDot: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    zIndex: 10,
   },
   notifBadge: {
     position: "absolute",

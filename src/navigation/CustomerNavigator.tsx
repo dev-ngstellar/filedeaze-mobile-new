@@ -6,7 +6,6 @@ import { CustomerDashboardScreen } from "../screens/customer/CustomerDashboardSc
 import { RaiseTicketScreen } from "../screens/customer/RaiseTicketScreen";
 import { TicketHistoryScreen } from "../screens/customer/TicketHistoryScreen";
 import { CustomerTicketDetailsScreen } from "../screens/customer/CustomerTicketDetailsScreen";
-import { LiveTrackingScreen } from "../screens/customer/LiveTrackingScreen";
 import { PaymentHistoryScreen } from "../screens/customer/PaymentHistoryScreen";
 import { InvoiceListScreen } from "../screens/customer/InvoiceListScreen";
 import { InvoiceDetailsScreen } from "../screens/customer/InvoiceDetailsScreen";
@@ -14,6 +13,7 @@ import { FeedbackScreen } from "../screens/customer/FeedbackScreen";
 import { AddressBookScreen } from "../screens/customer/AddressBookScreen";
 import { NotificationListScreen } from "../screens/shared/NotificationListScreen";
 import { CustomerAssetsScreen } from "../screens/customer/CustomerAssetsScreen";
+import { CustomerAssetDetailScreen } from "../screens/customer/CustomerAssetDetailScreen";
 import { MyAmcScreen } from "../screens/customer/MyAmcScreen";
 import { AmcDetailsScreen } from "../screens/customer/AmcDetailsScreen";
 
@@ -37,13 +37,13 @@ export const CustomerNavigator = () => {
       <Stack.Screen name="RaiseTicket" component={RaiseTicketScreen} />
       <Stack.Screen name="TicketHistory" component={TicketHistoryScreen} />
       <Stack.Screen name="CustomerTicketDetails" component={CustomerTicketDetailsScreen} />
-      <Stack.Screen name="LiveTracking" component={LiveTrackingScreen} />
       <Stack.Screen name="PaymentHistory" component={PaymentHistoryScreen} />
       <Stack.Screen name="InvoiceList" component={InvoiceListScreen} />
       <Stack.Screen name="InvoiceDetails" component={InvoiceDetailsScreen} />
       <Stack.Screen name="Feedback" component={FeedbackScreen} />
       <Stack.Screen name="AddressBook" component={AddressBookScreen} />
       <Stack.Screen name="CustomerAssets" component={CustomerAssetsScreen} />
+      <Stack.Screen name="CustomerAssetDetail" component={CustomerAssetDetailScreen} />
       <Stack.Screen name="MyAmc" component={MyAmcScreen} />
       <Stack.Screen name="AmcDetails" component={AmcDetailsScreen} />
 

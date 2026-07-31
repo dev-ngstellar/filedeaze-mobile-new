@@ -84,7 +84,7 @@ export const OtpVerificationScreen = () => {
     if (validationError) {
       setFormError("otp", { type: "manual", message: validationError });
       setError(validationError);
-      Alert.alert("Validation Error", validationError);
+      Alert.alert("Code Required", validationError);
       return;
     }
 
@@ -139,7 +139,7 @@ export const OtpVerificationScreen = () => {
       }
     } catch (err: any) {
       setLoading(false);
-      const backendErrorMsg = "Invalid OTP. Please enter the correct verification code.";
+      const backendErrorMsg = "Invalid verification code. Please enter the correct code.";
       setError(backendErrorMsg);
       setFormError("otp", { type: "manual", message: backendErrorMsg });
     }
@@ -155,11 +155,11 @@ export const OtpVerificationScreen = () => {
       } else {
         await AuthService.resendOtp(email, tenantId);
       }
-      Alert.alert("Code Resent", "A new OTP code has been dispatched to your email address.");
+      Alert.alert("Code Resent", "A new verification code has been sent to your email address.");
       setResendCountdown(30);
     } catch (err: any) {
-      setError(err?.message || "Failed to resend verification code.");
-      Alert.alert("Error", err?.message || "Failed to resend verification code.");
+      setError("Unable to resend code. Please try again.");
+      Alert.alert("Unable to Resend", "We couldn't resend the verification code. Please try again.");
     } finally {
       setResending(false);
     }

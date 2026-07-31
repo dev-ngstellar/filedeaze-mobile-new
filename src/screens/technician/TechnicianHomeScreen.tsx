@@ -71,7 +71,7 @@ export const TechnicianHomeScreen = () => {
   const firstName = user?.name?.split(" ")[0] || user?.name || "Technician";
   const { data: jobs = [], isLoading: isJobsLoading, isError, error, refetch, isRefetching } = useTechnicianJobs();
   const { data: invoices = [], isLoading: isInvoicesLoading, refetch: refetchInvoices, isRefetching: isRefetchingInvoices } = useTechnicianInvoices();
-  const { data: attendance, isLoading: isAttendanceLoading } = useAttendanceStatus();
+  const { data: attendance, isLoading: isAttendanceLoading, refetch: refetchAttendance, isRefetching: isRefetchingAttendance } = useAttendanceStatus();
 
   const checkInMutation = useCheckIn();
   const checkOutMutation = useCheckOut();
@@ -270,11 +270,11 @@ export const TechnicianHomeScreen = () => {
       });
       setLocationModalVisible(false);
       setLocationInput("");
-      setSuccessTitle("Success");
+      setSuccessTitle("Checked In");
       setSuccessMessage("Attendance checked in successfully.");
       setSuccessModalVisible(true);
     } catch (err: any) {
-      Alert.alert("Error", err.message || "Failed to check in.");
+      Alert.alert("Check-In Failed", "We couldn't record your check-in. Please check your location settings and try again.");
     } finally {
       setIsSubmittingAttendance(false);
     }
@@ -282,11 +282,13 @@ export const TechnicianHomeScreen = () => {
 
   const handleCheckOutSubmit = async () => {
     if (!attendance?.checkedIn) {
-      Alert.alert("Not Checked In", "You must be checked in to perform checkout.");
+      Alert.alert("Check-In Required", "You must check in first before recording check-out.");
       return;
     }
     setCheckoutModalVisible(true);
   };
+
+
 
   const getElapsedWorkingHours = () => {
     if (!attendance?.rawCheckInTime) return "0h 00m";
@@ -327,7 +329,7 @@ export const TechnicianHomeScreen = () => {
       setSuccessMessage(`Successfully checked out.\nWorking hours today: ${workingHoursStr}`);
       setSuccessModalVisible(true);
     } catch (err: any) {
-      Alert.alert("Error", err.message || "Failed to check out.");
+      Alert.alert("Check-Out Failed", "We couldn't record your check-out. Please check your location settings and try again.");
     } finally {
       setIsSubmittingAttendance(false);
     }
@@ -457,10 +459,11 @@ export const TechnicianHomeScreen = () => {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={isJobsLoading || isRefetching || isRefetchingInvoices}
+            refreshing={isJobsLoading || isRefetching || isRefetchingInvoices || isRefetchingAttendance}
             onRefresh={() => {
               refetch();
               refetchInvoices();
+              refetchAttendance();
             }}
             colors={[theme.colors.primary]}
             tintColor={theme.colors.primary}
@@ -656,7 +659,19 @@ export const TechnicianHomeScreen = () => {
               </View>
             </Pressable>
             <Pressable
-              onPress={() => navigation.navigate("AssignedJobs", { initialTab: "IN_PROGRESS" })}
+              onPress={() => {
+                const inProgressJobs = jobsList.filter(
+                  (j) => j.status === "IN_PROGRESS" || j.status === "ACCEPTED" || j.status === "TRAVELLING" || j.status === "REACHED_LOCATION"
+                );
+                if (inProgressJobs.length === 1) {
+                  const activeTicketId = inProgressJobs[0].id || inProgressJobs[0].ticketNo;
+                  navigation.navigate("TechnicianJobDetails", { jobId: activeTicketId });
+                } else if (inProgressJobs.length > 1) {
+                  navigation.navigate("AssignedJobs", { initialTab: "IN_PROGRESS" });
+                } else {
+                  Alert.alert("Active Jobs", "No active jobs available.");
+                }
+              }}
               style={({ pressed }) => [
                 styles.statBox,
                 {

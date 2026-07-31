@@ -1,6 +1,7 @@
 import { apiClient } from "../api/client";
 import { useAuthStore } from "../store/auth.store";
 import { APP_CONFIG } from "../config/app.config";
+import { uploadMultipartRequest } from "../utils/mediaUpload";
 
 export interface Address {
   id: string;
@@ -211,6 +212,7 @@ export interface CustomerAsset {
   createdAt: string;
   updatedAt: string;
   images?: { id: string; imageUrl: string }[];
+  category?: { id: string; name: string } | null;
   /** True when this asset has a currently ACTIVE AMC subscription. */
   hasActiveAmc: boolean;
 }
@@ -304,36 +306,10 @@ export const CustomerService = {
     apiClient.patch("/mobile/customer/profile", payload).then((r) => r.data.data),
 
   uploadProfilePhoto: (formData: FormData): Promise<{ profileImageUrl: string }> =>
-    apiClient
-      .post("/mobile/customer/profile/photo", formData, {
-        // Let axios/React Native generate the multipart boundary itself — pinning
-        // "multipart/form-data" without a boundary here produces a body the server can't parse.
-        headers: { "Content-Type": undefined },
-      })
-      .then((r) => r.data.data),
+    uploadMultipartRequest("/mobile/customer/profile/photo", formData),
 
-  raiseTicket: async (formData: FormData): Promise<any> => {
-    const { token } = useAuthStore.getState();
-    const headers: Record<string, string> = {
-      "x-tenant-code": APP_CONFIG.tenantCode,
-      "Accept": "application/json",
-    };
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${APP_CONFIG.apiBaseUrl}/mobile/customer/tickets`, {
-      method: "POST",
-      headers,
-      body: formData,
-    });
-
-    const resJson = await response.json();
-    if (!response.ok) {
-      throw new Error(resJson.message || "Failed to raise ticket");
-    }
-    return resJson.data;
-  },
+  raiseTicket: (formData: FormData): Promise<any> =>
+    uploadMultipartRequest("/mobile/customer/tickets", formData, { timeoutMs: 90000 }),
 
   getTickets: (status?: string): Promise<CustomerTicketDetail[]> =>
     apiClient
@@ -347,20 +323,6 @@ export const CustomerService = {
     apiClient
       .patch(`/mobile/customer/tickets/${id}/cancel`, { reason })
       .then((r) => r.data.data),
-
-  trackTicket: (id: string): Promise<{
-    ticketId: string;
-    status: string;
-    technician: {
-      id: string;
-      name: string;
-      phone: string;
-      currentLat: number | null;
-      currentLng: number | null;
-      rating: number | null;
-    } | null;
-    statusHistory: TicketLog[];
-  }> => apiClient.get(`/mobile/customer/tickets/${id}/track`).then((r) => r.data.data),
 
   getPayments: (): Promise<CustomerPayment[]> =>
     apiClient.get("/mobile/customer/payments").then((r) => r.data.data),

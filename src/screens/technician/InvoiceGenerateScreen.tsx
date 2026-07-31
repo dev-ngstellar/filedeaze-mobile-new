@@ -310,7 +310,7 @@ export const InvoiceGenerateScreen = () => {
         UTI: "com.adobe.pdf",
       });
     } catch (err: any) {
-      showAlert("Share Failed", err.message || "Failed to share invoice details.", "error");
+      showAlert("Share Failed", "We couldn't share the invoice details. Please try again.", "error");
     }
   };
 
@@ -323,9 +323,9 @@ export const InvoiceGenerateScreen = () => {
       } else {
         await Print.printAsync({ uri });
       }
-      showAlert("Download Initiated", `Invoice PDF for #${invoiceNo} is ready.`, "success");
+      showAlert("Invoice Ready", `Invoice PDF for #${invoiceNo} is ready.`, "success");
     } catch (err: any) {
-      showAlert("Download Failed", err.message || "Failed to download invoice.", "error");
+      showAlert("Download Failed", "We couldn't download the invoice. Please try again.", "error");
     } finally {
       setDownloading(false);
     }

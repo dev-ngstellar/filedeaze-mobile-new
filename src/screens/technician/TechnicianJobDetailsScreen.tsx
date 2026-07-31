@@ -69,6 +69,8 @@ import {
   useTechnicianJobs,
   useAttendanceStatus,
   useSaveBeforePhotos,
+  useAssignAssetToTicket,
+  useCustomerAssetsForTicket,
 } from "../../hooks/useJobs";
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
@@ -120,6 +122,16 @@ export const TechnicianJobDetailsScreen = () => {
   const collectPaymentMutation = useCollectPayment();
   const uploadImageMutation = useUploadTicketImage();
   const savePhotosMutation = useSaveBeforePhotos();
+  const assignAssetMutation = useAssignAssetToTicket();
+
+  const [assignAssetModalVisible, setAssignAssetModalVisible] = useState(false);
+  const [selectedAssetToAssign, setSelectedAssetToAssign] = useState<any>(null);
+
+  const { data: customerAssetsList = [], isLoading: isLoadingCustomerAssets } = useCustomerAssetsForTicket(
+    jobId,
+    assignAssetModalVisible || !job?.customerAsset
+  );
+
   const isCheckedIn = !!attendance?.checkedIn;
 
   const isVideoUrl = (url: string) => {
@@ -473,8 +485,8 @@ export const TechnicianJobDetailsScreen = () => {
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
-      setAlertModalTitle("Error");
-      setAlertModalMessage(err.message || "Failed to update status.");
+      setAlertModalTitle("Status Update Failed");
+      setAlertModalMessage(err.message || "We couldn't update status. Please try again.");
       setAlertModalVisible(true);
     }
   };
@@ -487,7 +499,7 @@ export const TechnicianJobDetailsScreen = () => {
   const handleRejectSubmit = async () => {
     const finalReason = selectedRejectReason === "Other" ? rejectReasonText : selectedRejectReason;
     if (!finalReason.trim()) {
-      showAlert("Required", "Please select or describe a rejection reason.");
+      showAlert("Reason Required", "Please select or describe a rejection reason.");
       return;
     }
     try {
@@ -502,13 +514,13 @@ export const TechnicianJobDetailsScreen = () => {
       setShouldNavigateHome(true);
       setSuccessVisible(true);
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to reject job.");
+      showAlert("Rejection Failed", "We couldn't reject this ticket. Please try again.");
     }
   };
 
   const handlePendingSubmit = async () => {
     if (!selectedPendingReason) {
-      showAlert("Required", "Please choose a pending reason.");
+      showAlert("Reason Required", "Please choose a pending reason before continuing.");
       return;
     }
     try {
@@ -546,7 +558,7 @@ export const TechnicianJobDetailsScreen = () => {
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to save status.");
+      showAlert("Status Update Failed", "We couldn't save pending status. Please try again.");
     } finally {
       setUploadingImage(false);
     }
@@ -554,7 +566,7 @@ export const TechnicianJobDetailsScreen = () => {
 
   const handleRescheduleSubmit = async () => {
     if (!nextVisitDate) {
-      showAlert("Required", "Please enter reschedule date.");
+      showAlert("Date Required", "Please enter a valid reschedule date.");
       return;
     }
     try {
@@ -572,7 +584,7 @@ export const TechnicianJobDetailsScreen = () => {
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to reschedule.");
+      showAlert("Reschedule Failed", "We couldn't reschedule this ticket. Please try again.");
     }
   };
 
@@ -591,7 +603,7 @@ export const TechnicianJobDetailsScreen = () => {
       setSuccessVisible(true);
       await refetch();
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to record reached status.");
+      showAlert("Check-In Failed", "We couldn't record location arrival. Please try again.");
     }
   };
 
@@ -629,7 +641,7 @@ export const TechnicianJobDetailsScreen = () => {
       // Fallback: Launch gallery if camera permission was denied or camera capture failed
       const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (libStatus !== "granted") {
-        showAlert("Permission Needed", "Camera or Gallery access is required to capture site photos.");
+        showAlert("Camera Permission Required", "Please allow camera access to take photos.");
         return;
       }
       const libResult = await ImagePicker.launchImageLibraryAsync({
@@ -643,7 +655,7 @@ export const TechnicianJobDetailsScreen = () => {
       }
     } catch (err: any) {
       console.error("=== ERROR in pickBeforeFromCamera ===", err);
-      showAlert("Photo Capture Error", err.message || "Failed to capture or pick photo.");
+      showAlert("Photo Capture Failed", "We couldn't capture or pick photo. Please try again.");
     }
   };
 
@@ -653,7 +665,7 @@ export const TechnicianJobDetailsScreen = () => {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       console.log("Media library permission status:", status);
       if (status !== "granted") {
-        showAlert("Permission Needed", "Library access is required.");
+        showAlert("Photo Permission Required", "Please allow photo access to choose images.");
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -670,7 +682,7 @@ export const TechnicianJobDetailsScreen = () => {
       }
     } catch (err: any) {
       console.error("=== ERROR in pickBeforeFromGallery ===", err);
-      showAlert("Gallery Error", err.message || "Failed to pick images.");
+      showAlert("Photo Selection Failed", "We couldn't select photos. Please try again.");
     }
   };
 
@@ -695,7 +707,7 @@ export const TechnicianJobDetailsScreen = () => {
       await refetch();
     } catch (err: any) {
       console.error("=== ERROR in startJobMutationCall ===", err);
-      showAlert("Error", err.message || "Failed to start job.");
+      showAlert("Job Start Failed", "We couldn't start this job. Please check your before photos and try again.");
     }
   };
 
@@ -723,7 +735,7 @@ export const TechnicianJobDetailsScreen = () => {
       if (status !== "granted") {
         const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (libStatus !== "granted") {
-          showAlert("Permission Needed", "Library access is required.");
+          showAlert("Photo Permission Required", "Please allow photo access to choose images.");
           return;
         }
         const result = await ImagePicker.launchImageLibraryAsync({
@@ -741,7 +753,7 @@ export const TechnicianJobDetailsScreen = () => {
       }
     } catch (err: any) {
       console.error("=== ERROR in pickPendingPhoto ===", err);
-      showAlert("Error", err.message || "Failed to capture pending photo.");
+      showAlert("Photo Capture Failed", "We couldn't capture pending photo. Please try again.");
     }
   };
 
@@ -757,7 +769,7 @@ export const TechnicianJobDetailsScreen = () => {
       try {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         hasCameraPerm = status === "granted";
-      } catch (e) {}
+      } catch (e) { }
 
       if (hasCameraPerm) {
         try {
@@ -769,7 +781,7 @@ export const TechnicianJobDetailsScreen = () => {
             setAfterPhotos((p) => [...p, result.assets[0].uri]);
             return;
           }
-        } catch (camErr) {}
+        } catch (camErr) { }
       }
 
       const { status: libStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -784,7 +796,7 @@ export const TechnicianJobDetailsScreen = () => {
       }
     } catch (err: any) {
       console.error("=== ERROR in pickAfterFromCamera ===", err);
-      showAlert("Error", err.message || "Failed to capture photo.");
+      showAlert("Photo Capture Failed", "We couldn't capture photo. Please try again.");
     }
   };
 
@@ -793,7 +805,7 @@ export const TechnicianJobDetailsScreen = () => {
       console.log("=== TRACE: pickAfterFromGallery START ===");
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        showAlert("Permission Denied", "Library access is required.");
+        showAlert("Photo Permission Required", "Please allow photo access to choose images.");
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -808,7 +820,7 @@ export const TechnicianJobDetailsScreen = () => {
       }
     } catch (err: any) {
       console.error("=== ERROR in pickAfterFromGallery ===", err);
-      showAlert("Error", err.message || "Failed to pick photo.");
+      showAlert("Photo Selection Failed", "We couldn't select photo. Please try again.");
     }
   };
 
@@ -971,7 +983,7 @@ export const TechnicianJobDetailsScreen = () => {
       await refetch();
       setCompleteStep(2);
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to complete ticket.");
+      showAlert("Completion Failed", "We couldn't complete this ticket. Please check your work notes and try again.");
     } finally {
       setSubmitting(false);
     }
@@ -993,11 +1005,11 @@ export const TechnicianJobDetailsScreen = () => {
         continue;
       }
       if (name !== "" && (isNaN(val) || val <= 0)) {
-        showAlert("Validation Error", `Please enter a valid amount greater than 0 for extra charge: "${name}"`);
+        showAlert("Invalid Amount", `Please enter a valid amount greater than 0 for extra charge: "${name}"`);
         return;
       }
       if (name === "" && !isNaN(val) && val > 0) {
-        showAlert("Validation Error", `Please enter a charge name for the amount: ${currencySymbol}${item.amountStr}`);
+        showAlert("Charge Name Required", `Please enter a charge name for the amount: ${currencySymbol}${item.amountStr}`);
         return;
       }
     }
@@ -1087,14 +1099,11 @@ export const TechnicianJobDetailsScreen = () => {
         invoiceGeneratedAt: new Date().toISOString(),
       });
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to collect payment.");
+      showAlert("Payment Failed", "We couldn't record payment. Please check payment details and try again.");
     } finally {
       setSubmitting(false);
     }
   };
-
-
-
   const openPhone = (phoneNumber: string) => {
     Linking.openURL(`tel:${phoneNumber}`);
   };
@@ -1273,11 +1282,12 @@ export const TechnicianJobDetailsScreen = () => {
                   );
                 })()}
               </View>
-              <Text style={[styles.infoValue, { color: theme.colors.text, fontWeight: "700" }]}>
-                {job.customerAsset?.name || "No Asset Linked"}
-              </Text>
+
               {job.customerAsset ? (
                 <>
+                  <Text style={[styles.infoValue, { color: theme.colors.text, fontWeight: "700" }]}>
+                    {job.customerAsset.name}
+                  </Text>
                   {(job.customerAsset.brand || job.customerAsset.model) ? (
                     <Text style={{ color: theme.colors.textMuted, fontSize: 11, marginTop: 2 }}>
                       {job.customerAsset.brand ?? "—"} · {job.customerAsset.model ?? "—"}
@@ -1297,7 +1307,23 @@ export const TechnicianJobDetailsScreen = () => {
                     </View>
                   ) : null}
                 </>
-              ) : null}
+              ) : (
+                <View style={{ marginTop: 4 }}>
+                  <Text style={[styles.infoValue, { color: theme.colors.textMuted, fontStyle: "italic", marginBottom: 8 }]}>
+                    No asset linked to this ticket
+                  </Text>
+                  <AppButton
+                    title="Assign Asset"
+                    onPress={() => {
+                      setSelectedAssetToAssign(null);
+                      setAssignAssetModalVisible(true);
+                    }}
+                    variant="outline"
+                    size="sm"
+                    icon={<ShieldCheck size={14} color={theme.colors.primary} />}
+                  />
+                </View>
+              )}
             </View>
           </View>
         </AppCard>
@@ -1642,7 +1668,7 @@ export const TechnicianJobDetailsScreen = () => {
 
             <View style={styles.btnRow}>
               <AppButton
-                title="Mark Pending"
+                title="Pending"
                 variant="outline"
                 onPress={() => {
                   setSelectedPendingReason("");
@@ -1655,7 +1681,7 @@ export const TechnicianJobDetailsScreen = () => {
                 icon={<AlertTriangle size={14} color={theme.colors.warning} />}
               />
               <AppButton
-                title="Complete Job"
+                title="Complete"
                 onPress={() => {
                   setCompleteStep(1);
                   setCompleteFormVisible(true);
@@ -2046,7 +2072,7 @@ export const TechnicianJobDetailsScreen = () => {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }} style={{ width: "100%" }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
                 <AlertTriangle size={24} color={theme.colors.warning} />
-                <Text style={[styles.formTitle, { color: theme.colors.text, marginBottom: 0 }]}>Mark as Pending</Text>
+                <Text style={[styles.formTitle, { color: theme.colors.text, marginBottom: 0 }]}>Pending</Text>
               </View>
 
               <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 14 }}>
@@ -2525,7 +2551,7 @@ export const TechnicianJobDetailsScreen = () => {
                     <AppButton title="Cancel" variant="outline" onPress={() => setCompleteFormVisible(false)} style={{ flex: 1 }} />
                   )}
                   <AppButton
-                    title={completeStep === 2 ? "Collect Payment" : "Submit & Complete Job"}
+                    title={completeStep === 2 ? "Collect Payment" : "Complete Job"}
                     variant="success"
                     onPress={completeStep === 2 ? handlePaymentSubmit : handleCompleteSubmit}
                     loading={submitting}
@@ -2627,6 +2653,105 @@ export const TechnicianJobDetailsScreen = () => {
                 />
               </ScrollView>
             </AppCard>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Assign Asset Modal */}
+      <Modal
+        visible={assignAssetModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAssignAssetModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Assign Existing Asset</Text>
+              <Pressable onPress={() => setAssignAssetModalVisible(false)} hitSlop={8}>
+                <XCircle size={22} color={theme.colors.textMuted} />
+              </Pressable>
+            </View>
+
+            <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 14 }}>
+              Select an existing asset registered for this customer:
+            </Text>
+
+            {isLoadingCustomerAssets ? (
+              <AppLoader message="Retrieving customer assets..." />
+            ) : customerAssetsList.length === 0 ? (
+              <View style={{ alignItems: "center", paddingVertical: 20 }}>
+                <Text style={{ color: theme.colors.textMuted, fontSize: 13 }}>No assets registered for this customer.</Text>
+              </View>
+            ) : (
+              <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator>
+                {customerAssetsList.map((item: any) => {
+                  const isSelected = selectedAssetToAssign?.id === item.id;
+                  return (
+                    <Pressable
+                      key={item.id}
+                      onPress={() => setSelectedAssetToAssign(item)}
+                      style={[
+                        {
+                          padding: 12,
+                          borderRadius: 12,
+                          borderWidth: 1.5,
+                          marginBottom: 8,
+                          backgroundColor: isSelected ? `${theme.colors.primary}0a` : theme.colors.background,
+                          borderColor: isSelected ? theme.colors.primary : theme.colors.borderLight,
+                        },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 14, fontWeight: "700", color: isSelected ? theme.colors.primary : theme.colors.text }}>
+                        {item.name}
+                      </Text>
+                      {(item.brand || item.model) && (
+                        <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                          {[item.brand, item.model].filter(Boolean).join(" · ")}
+                        </Text>
+                      )}
+                      {item.serialNumber && (
+                        <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 1 }}>
+                          S/N: {item.serialNumber}
+                        </Text>
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+              <AppButton
+                title="Cancel"
+                variant="outline"
+                onPress={() => setAssignAssetModalVisible(false)}
+                style={{ flex: 1 }}
+              />
+              <AppButton
+                title="Confirm Assignment"
+                variant="primary"
+                disabled={!selectedAssetToAssign || assignAssetMutation.isPending}
+                loading={assignAssetMutation.isPending}
+                onPress={async () => {
+                  if (!selectedAssetToAssign) return;
+                  try {
+                    await assignAssetMutation.mutateAsync({
+                      ticketId: jobId,
+                      assetId: selectedAssetToAssign.id,
+                    });
+                    setAssignAssetModalVisible(false);
+                    setSuccessTitle("Asset Assigned");
+                    setSuccessMessage(`Asset "${selectedAssetToAssign.name}" assigned successfully to this ticket.`);
+                    setSuccessVisible(true);
+                    await refetch();
+                  } catch (err: any) {
+                    showAlert("Assignment Failed", "We couldn't assign the asset. Please try again.");
+                  }
+                }}
+                style={{ flex: 1 }}
+              />
+            </View>
           </View>
         </View>
       </Modal>
@@ -2967,6 +3092,16 @@ const styles = StyleSheet.create({
     maxWidth: 360,
     padding: 20,
     borderRadius: 16,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: "800",
   },
   bottomSheetContainer: {
     width: "100%",

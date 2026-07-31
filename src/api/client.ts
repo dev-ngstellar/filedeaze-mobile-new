@@ -26,6 +26,12 @@ apiClient.interceptors.request.use(
       config.headers["Authorization"] = `Bearer ${token}`;
     }
 
+    // Automatically remove JSON Content-Type for FormData payloads
+    // so React Native / Axios native layer generates multipart boundary header
+    if (config.data instanceof FormData) {
+      delete config.headers["Content-Type"];
+    }
+
     return config;
   },
   (error) => {
@@ -51,9 +57,10 @@ apiClient.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       const url: string = originalRequest.url || "";
       const isAuthEndpoint = url.includes("/auth/");
+      const isUploadRequest = originalRequest.data instanceof FormData || url.includes("/images") || url.includes("/photos");
 
       if (isAuthEndpoint) {
         return Promise.reject(error);
@@ -75,6 +82,7 @@ apiClient.interceptors.response.use(
                   Accept: "application/json",
                   "x-tenant-code": APP_CONFIG.tenantCode,
                 },
+                timeout: 15000,
               }
             );
 
@@ -96,17 +104,25 @@ apiClient.interceptors.response.use(
           } catch (refreshErr: any) {
             _isRefreshing = false;
             _refreshSubscribers = [];
-            if (refreshErr?.response?.status === 401 || refreshErr?.response?.status === 403) {
+            // ONLY log out if the backend explicitly responded with 401/403 AND this is NOT an upload request.
+            // Upload failures must NEVER force a session logout under any circumstance.
+            if (!isUploadRequest && (refreshErr?.response?.status === 401 || refreshErr?.response?.status === 403)) {
+              console.warn("[ApiClient] Refresh token explicitly rejected. Logging out.");
               logout();
+            } else {
+              console.warn("[ApiClient] Refresh token attempt failed or upload request failed. Auth state preserved.");
             }
-            return Promise.reject(new Error("Your session has expired. Please log in again."));
+            return Promise.reject(new Error("We couldn't upload your photo right now. Please check your internet connection and try again."));
           }
         }
 
-        const retryOrigRequest = new Promise((resolve) => {
+        const retryOrigRequest = new Promise((resolve, reject) => {
           subscribeTokenRefresh((token) => {
             originalRequest.headers["Authorization"] = `Bearer ${token}`;
-            resolve(apiClient(originalRequest));
+            if (originalRequest.data instanceof FormData) {
+              delete originalRequest.headers["Content-Type"];
+            }
+            apiClient(originalRequest).then(resolve).catch(reject);
           });
         });
 
@@ -128,6 +144,12 @@ apiClient.interceptors.response.use(
       errorMessage = error.message;
     }
 
-    return Promise.reject(new Error(errorMessage));
+    const errObj: any = new Error(errorMessage);
+    errObj.response = error.response;
+    errObj.status = error.response?.status;
+    errObj.code = error.code;
+    errObj.isAxiosError = error.isAxiosError;
+
+    return Promise.reject(errObj);
   }
 );

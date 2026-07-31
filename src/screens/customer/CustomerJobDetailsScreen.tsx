@@ -131,7 +131,6 @@ export const CustomerJobDetailsScreen = () => {
 
   // Conditions
   const isCancellable = ["NEW_TICKET", "ASSIGNED", "ACCEPTED"].includes(ticket.status);
-  const isTrackable = ["TRAVELLING", "REACHED_LOCATION", "IN_PROGRESS"].includes(ticket.status);
   const isClosed = ["COMPLETED", "INVOICE_GENERATED", "TICKET_CLOSED", "CLOSED"].includes(ticket.status);
   const isCancelled = ticket.status === "CANCELLED";
 
@@ -160,12 +159,12 @@ export const CustomerJobDetailsScreen = () => {
 
     try {
       await cancelTicketMutation.mutateAsync({ id: ticket.id, reason: cancelReason });
-      Alert.alert("Cancelled", "Your service request has been cancelled successfully.");
+      Alert.alert("Ticket Cancelled", "Your service request has been cancelled.");
       setCancelModalVisible(false);
       setCancelReason("");
       refetch();
     } catch (err: any) {
-      Alert.alert("Error", err?.message || "Failed to cancel ticket");
+      Alert.alert("Cancellation Failed", "We couldn't cancel your request. Please try again.");
     }
   };
 
@@ -305,54 +304,13 @@ export const CustomerJobDetailsScreen = () => {
 
         <View style={[styles.premiumCard, { backgroundColor: theme.colors.card, paddingVertical: 20 }]}>
           {ticket.statusLogs && ticket.statusLogs.length > 0 ? (
-            <>
-              {ticket.statusLogs.map((log, index) => {
-                const isLast = index === ticket.statusLogs.length - 1;
-                const subProps = getStatusBadgeProps(log.status);
-                const StatusIcon = getStatusIcon(log.status);
-                const statusColor = getStatusColor(log.status);
-                const showLine = !isLast || isClosed;
+            ticket.statusLogs.map((log, index) => {
+              const isLast = index === ticket.statusLogs.length - 1;
+              const subProps = getStatusBadgeProps(log.status);
+              const StatusIcon = getStatusIcon(log.status);
 
-                return (
-                  <View key={log.id} style={styles.timelineItem}>
-                    <View style={styles.timelineIndicator}>
-                      <View style={[
-                        styles.timelineDotContainer,
-                        {
-                          backgroundColor: theme.colors.card,
-                          borderColor: theme.colors.primary,
-                          borderWidth: 1.5,
-                        }
-                      ]}>
-                        <StatusIcon size={12} color={theme.colors.primary} />
-                      </View>
-                      {showLine && <View style={[styles.timelineLine, { backgroundColor: theme.colors.primary }]} />}
-                    </View>
-                    <View style={styles.timelineContent}>
-                      <View style={styles.timelineHeader}>
-                        <Text style={[styles.timelineStatusText, { color: theme.colors.primary, fontWeight: "700" }]}>
-                          {subProps.label}
-                        </Text>
-                        <View style={styles.timeWrapper}>
-                          <Clock size={11} color={theme.colors.textMuted} style={{ marginRight: 3 }} />
-                          <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>
-                            {formatDate(log.changedAt)}
-                          </Text>
-                        </View>
-                      </View>
-                      {log.notes && (
-                        <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4, lineHeight: 16 }}>
-                          {log.notes}
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-                );
-              })}
-
-              {/* Integrated Feedback Node as part of the timeline */}
-              {isClosed && (
-                <View style={styles.timelineItem}>
+              return (
+                <View key={log.id} style={styles.timelineItem}>
                   <View style={styles.timelineIndicator}>
                     <View style={[
                       styles.timelineDotContainer,
@@ -362,54 +320,31 @@ export const CustomerJobDetailsScreen = () => {
                         borderWidth: 1.5,
                       }
                     ]}>
-                      <Star size={12} color={theme.colors.primary} />
+                      <StatusIcon size={12} color={theme.colors.primary} />
                     </View>
+                    {!isLast && <View style={[styles.timelineLine, { backgroundColor: theme.colors.primary }]} />}
                   </View>
                   <View style={styles.timelineContent}>
                     <View style={styles.timelineHeader}>
                       <Text style={[styles.timelineStatusText, { color: theme.colors.primary, fontWeight: "700" }]}>
-                        SERVICE FEEDBACK
+                        {subProps.label}
                       </Text>
+                      <View style={styles.timeWrapper}>
+                        <Clock size={11} color={theme.colors.textMuted} style={{ marginRight: 3 }} />
+                        <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>
+                          {formatDate(log.changedAt)}
+                        </Text>
+                      </View>
                     </View>
-                    <View style={{ marginTop: 8 }}>
-                      {ticket.feedback ? (
-                        <View style={{ alignItems: "flex-start" }}>
-                          <View style={styles.starsRow}>
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <Star
-                                key={star}
-                                size={14}
-                                color={star <= ticket.feedback!.rating ? theme.colors.warning : theme.colors.textLight}
-                                fill={star <= ticket.feedback!.rating ? theme.colors.warning : "transparent"}
-                              />
-                            ))}
-                          </View>
-                          <Text style={{ color: theme.colors.text, fontSize: 13, marginTop: 6, fontStyle: "italic" }}>
-                            "{ticket.feedback.review}"
-                          </Text>
-                        </View>
-                      ) : (
-                        <Pressable
-                          style={({ pressed }) => [
-                            styles.callButton,
-                            {
-                              backgroundColor: `${theme.colors.primary}0D`,
-                              opacity: pressed ? 0.7 : 1,
-                              alignSelf: "flex-start",
-                              marginTop: 4,
-                            }
-                          ]}
-                          onPress={() => navigation.navigate("Feedback", { ticketId: ticket.id, ticketNumber: ticket.ticketNumber })}
-                        >
-                          <Star size={14} color={theme.colors.primary} style={{ marginRight: 6 }} />
-                          <Text style={[styles.callButtonText, { color: theme.colors.primary }]}>Submit Feedback</Text>
-                        </Pressable>
-                      )}
-                    </View>
+                    {log.notes && (
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4, lineHeight: 16 }}>
+                        {log.notes}
+                      </Text>
+                    )}
                   </View>
                 </View>
-              )}
-            </>
+              );
+            })
           ) : (
             <View style={{ alignItems: "center", padding: 20 }}>
               <Text style={{ color: theme.colors.textMuted }}>No history logs yet</Text>
@@ -417,16 +352,68 @@ export const CustomerJobDetailsScreen = () => {
           )}
         </View>
 
-        {/* Cancellation and Track Live actions */}
-        <View style={styles.actionContainer}>
-          {isTrackable && (
-            <AppButton
-              title="Track Live"
-              onPress={() => navigation.navigate("LiveTracking", { ticketId: ticket.id, ticketNumber: ticket.ticketNumber })}
-              style={{ marginBottom: 10 }}
-            />
-          )}
+        {/* Standalone Service Completion Card (Rendered outside the timeline) */}
+        {isClosed && (
+          <View style={[styles.completionCard, { backgroundColor: theme.colors.card, borderColor: `${theme.colors.success}30` }]}>
+            <View style={styles.completionBannerHeader}>
+              <View style={[styles.successIconBadge, { backgroundColor: `${theme.colors.success}15` }]}>
+                <CheckCircle2 size={24} color={theme.colors.success} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.completionTitle, { color: theme.colors.text }]}>
+                  🎉 Service Completed
+                </Text>
+                <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                  Your service request has been completed successfully.
+                </Text>
+              </View>
+            </View>
 
+            <View style={[styles.divider, { backgroundColor: theme.colors.borderLight, marginVertical: 12 }]} />
+
+            <Text style={{ fontSize: 13, color: theme.colors.textMuted, lineHeight: 18, marginBottom: 12 }}>
+              Thank you for choosing Us. We'd love to hear about your experience to continuously improve our service quality.
+            </Text>
+
+            {ticket.feedback ? (
+              <View style={styles.submittedFeedbackBox}>
+                <View style={[styles.submittedBadgeRow, { backgroundColor: `${theme.colors.success}12` }]}>
+                  <CheckCircle2 size={15} color={theme.colors.success} />
+                  <Text style={{ color: theme.colors.success, fontWeight: "700", fontSize: 13 }}>
+                    ✅ Thank You! Feedback Submitted
+                  </Text>
+                </View>
+
+                <View style={[styles.starsRow, { gap: 6, marginTop: 10, justifyContent: "center" }]}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <Star
+                      key={star}
+                      size={22}
+                      color={star <= ticket.feedback!.rating ? theme.colors.primary : theme.colors.borderLight}
+                      fill={star <= ticket.feedback!.rating ? theme.colors.primary : "transparent"}
+                    />
+                  ))}
+                </View>
+
+                {ticket.feedback.review ? (
+                  <Text style={{ color: theme.colors.text, fontSize: 13, marginTop: 8, fontStyle: "italic", textAlign: "center", lineHeight: 18 }}>
+                    "{ticket.feedback.review}"
+                  </Text>
+                ) : null}
+              </View>
+            ) : (
+              <AppButton
+                title="Rate & Review Service"
+                onPress={() => navigation.navigate("Feedback", { ticketId: ticket.id, ticketNumber: ticket.ticketNumber })}
+                variant="primary"
+                style={{ marginTop: 4 }}
+              />
+            )}
+          </View>
+        )}
+
+        {/* Cancellation action */}
+        <View style={styles.actionContainer}>
           {isCancellable && (
             <AppButton
               title="Cancel Ticket"
@@ -704,6 +691,46 @@ const styles = StyleSheet.create({
   starsRow: {
     flexDirection: "row",
     gap: 4,
+  },
+  completionCard: {
+    borderRadius: 16,
+    borderWidth: 1.5,
+    padding: 16,
+    marginTop: 16,
+    marginBottom: 16,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  completionBannerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  successIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  completionTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  submittedFeedbackBox: {
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  submittedBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
 });
 

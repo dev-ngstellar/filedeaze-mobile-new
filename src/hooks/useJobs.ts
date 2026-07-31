@@ -57,6 +57,29 @@ export function useUpdateJobStatus() {
   });
 }
 
+export function useAssignAssetToTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ ticketId, assetId }: { ticketId: string; assetId: string }) =>
+      JobService.assignAssetToTicket(ticketId, assetId),
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });
+      queryClient.invalidateQueries({ queryKey: jobQueryKeys.details(vars.ticketId) });
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", vars.ticketId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", vars.ticketId] });
+    },
+  });
+}
+
+export function useCustomerAssetsForTicket(ticketId: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["customer-assets-for-ticket", ticketId],
+    queryFn: () => JobService.getCustomerAssetsForTicket(ticketId),
+    enabled: enabled && !!ticketId,
+  });
+}
+
 export function useRejectJob() {
   const queryClient = useQueryClient();
 
@@ -240,15 +263,10 @@ export function useAttendanceStatus() {
       const attendanceStatus = await JobService.getAttendanceStatus();
       console.log("=== TRACE STEP 3: useAttendanceStatus queryFn RESULT ===");
       console.log("Hook Object:", JSON.stringify(attendanceStatus, null, 2));
-      console.log("Hook Values:", {
-        checkInLocation: (attendanceStatus as any)?.checkInLocation,
-        location: (attendanceStatus as any)?.location,
-        checkInRemarks: (attendanceStatus as any)?.checkInRemarks,
-        remarks: (attendanceStatus as any)?.remarks,
-      });
       return attendanceStatus;
     },
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }
 

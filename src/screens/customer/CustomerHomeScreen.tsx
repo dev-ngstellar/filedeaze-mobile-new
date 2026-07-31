@@ -55,6 +55,7 @@ import {
   useCustomerHasActiveAmc,
 } from "../../hooks/useCustomer";
 import { useUnreadNotificationCount } from "../../hooks/useNotifications";
+import { prepareImageForUpload, prepareMediaForUpload } from "../../utils/mediaUpload";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
@@ -197,7 +198,7 @@ export const CustomerHomeScreen = () => {
 
     if (Object.keys(errs).length > 0) {
       setProfileErrors(errs);
-      Alert.alert("Validation Error", Object.values(errs)[0]);
+      Alert.alert("Information Required", Object.values(errs)[0]);
       return;
     }
     setProfileErrors({});
@@ -214,10 +215,10 @@ export const CustomerHomeScreen = () => {
       {
         onSuccess: () => {
           setIsEditingProfile(false);
-          Alert.alert("Success", "Profile updated successfully!");
+          Alert.alert("Profile Updated", "Your profile details have been saved successfully.");
         },
         onError: (err: any) => {
-          Alert.alert("Error", err.message || "Failed to update profile");
+          Alert.alert("Update Failed", "We couldn't update your profile details. Please try again.");
         },
       },
     );
@@ -235,25 +236,17 @@ export const CustomerHomeScreen = () => {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
 
-        // Downscale before upload — sending a raw multi-megapixel camera-roll photo as an avatar
-        // is unnecessary and, combined with repeated picks, is a known source of the app crashing
-        // and reloading on lower-end Android devices.
-        let uploadUri = asset.uri;
-        try {
-          const context = ImageManipulator.manipulate(asset.uri);
-          context.resize({ width: 800 });
-          const rendered = await context.renderAsync();
-          const compressed = await rendered.saveAsync({ compress: 0.6, format: SaveFormat.JPEG });
-          uploadUri = compressed.uri;
-        } catch (compressionError) {
-          console.error("Failed to compress profile photo:", compressionError);
-        }
+        const prepared = await prepareImageForUpload(
+          { uri: asset.uri, fileName: asset.fileName, mimeType: asset.mimeType, fileSize: asset.fileSize },
+          "GALLERY",
+          0
+        );
 
         const formData = new FormData();
         formData.append("photo", {
-          uri: Platform.OS === "ios" ? uploadUri.replace("file://", "") : uploadUri,
-          type: "image/jpeg",
-          name: asset.fileName || "profile_photo.jpg",
+          uri: prepared.uri,
+          type: prepared.type,
+          name: prepared.name,
         } as any);
 
         uploadPhotoMutation.mutate(formData, {
@@ -261,16 +254,16 @@ export const CustomerHomeScreen = () => {
             if (data?.profileImageUrl) {
               updateAvatar(data.profileImageUrl);
             }
-            Alert.alert("Success", "Profile photo updated successfully");
+            Alert.alert("Photo Updated", "Your profile photo has been updated successfully.");
           },
           onError: (err: any) => {
-            Alert.alert("Error", err.message || "Failed to update profile photo");
+            Alert.alert("Upload Failed", err?.message || "We couldn't update your profile photo. Please try again.");
           },
         });
       }
     } catch (error) {
       console.log("Error picking image:", error);
-      Alert.alert("Error", "Could not pick image");
+      Alert.alert("Photo Selection Failed", "Unable to select photo. Please try again.");
     }
   };
 
@@ -489,125 +482,34 @@ export const CustomerHomeScreen = () => {
 
         {/* Drawer Removed */}
 
-        {/* Main Content View below header & Customer Account Banner */}
-        {bookingMode === "AMC" && activeTab === "HOME" ? (
-          <View style={{ flex: 1 }}>
-            {/* Location Bar */}
-            <View style={[styles.locationBar, { backgroundColor: theme.colors.card, marginBottom: 0 }]}>
-              <View style={styles.locationLeft}>
-                <MapPin size={16} color={theme.colors.primary} />
-                <View style={{ marginLeft: 8, flex: 1 }}>
-                  <Text style={[styles.locationLabel, { color: theme.colors.textMuted }]}>Your Location</Text>
-                  <Text style={[styles.locationAddr, { color: theme.colors.text }]} numberOfLines={1}>
-                    {profile?.address
-                      ? [profile.address, profile.city].filter(Boolean).join(", ")
-                      : "Set your address"}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* AMC Customer Service Mode Switcher */}
-            {hasActiveAmc && (
-              <View style={{ flexDirection: "row", backgroundColor: theme.colors.card, borderRadius: 12, padding: 4, marginHorizontal: 16, marginTop: 12, marginBottom: 4, borderWidth: 1, borderColor: theme.colors.borderLight }}>
-                <Pressable
-                  onPress={() => setBookingMode("NORMAL")}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 10,
-                    borderRadius: 8,
-                    backgroundColor: (bookingMode as string) === "NORMAL" ? theme.colors.primary : "transparent",
-                    alignItems: "center",
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: (bookingMode as string) === "NORMAL" ? "#ffffff" : theme.colors.textMuted }}>
-                    Normal Service
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setBookingMode("AMC")}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 10,
-                    borderRadius: 8,
-                    backgroundColor: (bookingMode as string) === "AMC" ? theme.colors.primary : "transparent",
-                    alignItems: "center",
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: (bookingMode as string) === "AMC" ? "#ffffff" : theme.colors.textMuted }}>
-                    AMC Service
-                  </Text>
-                </Pressable>
-              </View>
-            )}
-
-            <CustomerAssetsScreen />
-          </View>
-        ) : (
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-            refreshControl={
-              <RefreshControl
-                refreshing={isRefreshing()}
-                onRefresh={handleRefresh}
-                tintColor={theme.colors.primary}
-              />
-            }
-          >
-            {activeTab === "HOME" && (
-              <View>
-                {/* Location Bar */}
-                <View style={[styles.locationBar, { backgroundColor: theme.colors.card }]}>
-                  <View style={styles.locationLeft}>
-                    <MapPin size={16} color={theme.colors.primary} />
-                    <View style={{ marginLeft: 8, flex: 1 }}>
-                      <Text style={[styles.locationLabel, { color: theme.colors.textMuted }]}>Your Location</Text>
-                      <Text style={[styles.locationAddr, { color: theme.colors.text }]} numberOfLines={1}>
-                        {profile?.address
-                          ? [profile.address, profile.city].filter(Boolean).join(", ")
-                          : "Set your address"}
-                      </Text>
-                    </View>
+        {/* Main Content View below header */}
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing()}
+              onRefresh={handleRefresh}
+              tintColor={theme.colors.primary}
+            />
+          }
+        >
+          {activeTab === "HOME" && (
+            <View>
+              {/* Location Bar */}
+              <View style={[styles.locationBar, { backgroundColor: theme.colors.card }]}>
+                <View style={styles.locationLeft}>
+                  <MapPin size={16} color={theme.colors.primary} />
+                  <View style={{ marginLeft: 8, flex: 1 }}>
+                    <Text style={[styles.locationLabel, { color: theme.colors.textMuted }]}>Your Location</Text>
+                    <Text style={[styles.locationAddr, { color: theme.colors.text }]} numberOfLines={1}>
+                      {profile?.address
+                        ? [profile.address, profile.city].filter(Boolean).join(", ")
+                        : "Set your address"}
+                    </Text>
                   </View>
                 </View>
-
-                {/* AMC Customer Service Mode Switcher */}
-                {hasActiveAmc && (
-                  <View style={{ flexDirection: "row", backgroundColor: theme.colors.card, borderRadius: 12, padding: 4, marginHorizontal: 16, marginTop: 12, marginBottom: 4, borderWidth: 1, borderColor: theme.colors.borderLight }}>
-                    <Pressable
-                      onPress={() => setBookingMode("NORMAL")}
-                      style={{
-                        flex: 1,
-                        paddingVertical: 10,
-                        borderRadius: 8,
-                        backgroundColor: bookingMode === "NORMAL" ? theme.colors.primary : "transparent",
-                        alignItems: "center",
-                      }}
-                    >
-                      <Text style={{ fontSize: 13, fontWeight: "700", color: bookingMode === "NORMAL" ? "#ffffff" : theme.colors.textMuted }}>
-                        Normal Service
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      onPress={() => setBookingMode("AMC")}
-                      style={{
-                        flex: 1,
-                        paddingVertical: 10,
-                        borderRadius: 8,
-                        backgroundColor: bookingMode === "AMC" ? theme.colors.primary : "transparent",
-                        alignItems: "center",
-                      }}
-                    >
-                      <Text style={{ fontSize: 13, fontWeight: "700", color: bookingMode === "AMC" ? "#ffffff" : theme.colors.textMuted }}>
-                        AMC Service
-                      </Text>
-                    </Pressable>
-                  </View>
-                )}
-
+              </View>
 
               {/* Search Bar + Dropdown */}
               <View style={[styles.homeSearchWrap, { zIndex: 100, elevation: 100 }]}>
@@ -678,7 +580,6 @@ export const CustomerHomeScreen = () => {
                               navigation.navigate("RaiseTicket", {
                                 categoryId: cat.id,
                                 categoryName: cat.name,
-                                bookingMode: hasActiveAmc ? bookingMode : "NORMAL",
                               });
                             }}
                           >
@@ -728,7 +629,6 @@ export const CustomerHomeScreen = () => {
                               onPress={() => navigation.navigate("RaiseTicket", {
                                 categoryId: cat.id,
                                 categoryName: cat.name,
-                                bookingMode: hasActiveAmc ? bookingMode : "NORMAL",
                               })}
                             >
                               <Text style={styles.featuredBannerBtnText}>Book Now</Text>
@@ -797,7 +697,6 @@ export const CustomerHomeScreen = () => {
                           onPress={() => navigation.navigate("RaiseTicket", {
                             categoryId: cat.id,
                             categoryName: cat.name,
-                            bookingMode: hasActiveAmc ? bookingMode : "NORMAL",
                           })}
                         >
                           <View style={[styles.catImageWrap, { backgroundColor: theme.colors.background }]}>
@@ -1415,7 +1314,6 @@ export const CustomerHomeScreen = () => {
             </View>
           )}
         </ScrollView>
-      )}
 
         {/* Sticky Bottom Navigation Bar */}
         <View style={[
@@ -2037,6 +1935,41 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     flex: 1,
     lineHeight: 16,
+  },
+  myAssetsBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 4,
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  myAssetsIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  myAssetsTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  myAssetsSub: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  activeAmcBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
   },
 });
 

@@ -122,32 +122,32 @@ export const AddressBookScreen = () => {
       let saved: Address;
       if (form.id) {
         saved = await updateAddressMutation.mutateAsync({ id: form.id, payload });
-        Alert.alert("Success", "Address updated successfully.");
+        Alert.alert("Address Updated", "Your address has been saved successfully.");
       } else {
         saved = await addAddressMutation.mutateAsync(payload);
-        Alert.alert("Success", "Address saved successfully.");
+        Alert.alert("Address Saved", "Your new address has been added successfully.");
       }
       setModalVisible(false);
     } catch (error: any) {
-      Alert.alert("Error", error?.message || "Failed to save address");
+      Alert.alert("Save Failed", "We couldn't save your address. Please try again.");
     }
   };
 
   const handleDelete = (id: string) => {
     Alert.alert(
-      "Confirm Delete",
-      "Are you sure you want to remove this address?",
+      "Remove Address",
+      "Are you sure you want to remove this address from your book?",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Delete",
+          text: "Remove",
           style: "destructive",
           onPress: async () => {
             try {
               await deleteAddressMutation.mutateAsync(id);
-              Alert.alert("Deleted", "Address removed successfully.");
+              Alert.alert("Address Removed", "The address has been removed from your book.");
             } catch (error: any) {
-              Alert.alert("Error", error?.message || "Failed to delete address");
+              Alert.alert("Removal Failed", "We couldn't remove your address. Please try again.");
             }
           },
         },

@@ -99,7 +99,7 @@ export const CheckOutScreen = () => {
         () => navigation.navigate("TechnicianHome")
       );
     } catch (err: any) {
-      showAlert("Error", err.message || "Failed to check out.", "error");
+      showAlert("Check-Out Failed", "We couldn't record your check-out. Please check your location settings and try again.", "error");
     } finally {
       setIsSubmitting(false);
     }

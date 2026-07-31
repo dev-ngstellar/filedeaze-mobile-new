@@ -7,7 +7,6 @@ export const customerKeys = {
   profile: () => [...customerKeys.all, "profile"] as const,
   tickets: (status?: string) => [...customerKeys.all, "tickets", { status }] as const,
   ticket: (id: string) => [...customerKeys.all, "ticket", id] as const,
-  tracking: (id: string) => [...customerKeys.all, "tracking", id] as const,
   payments: () => [...customerKeys.all, "payments"] as const,
   feedback: () => [...customerKeys.all, "feedback"] as const,
   invoices: () => [...customerKeys.all, "invoices"] as const,
@@ -93,14 +92,6 @@ export function useCancelCustomerTicket() {
   });
 }
 
-export function useTrackCustomerTicket(id: string, options?: { refetchInterval?: number; enabled?: boolean }) {
-  return useQuery({
-    queryKey: customerKeys.tracking(id),
-    queryFn: () => CustomerService.trackTicket(id),
-    enabled: !!id && (options?.enabled ?? true),
-    refetchInterval: options?.refetchInterval,
-  });
-}
 
 export function useCustomerPayments() {
   return useQuery({

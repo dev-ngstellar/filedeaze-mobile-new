@@ -22,11 +22,10 @@ export type CustomerStackParamList = {
   CustomerJobDetails: { jobId: string };
   CustomerDashboard: undefined;
   RaiseTicket:
-    | { categoryId?: string; categoryName?: string; assetId?: string; assetName?: string; contractId?: string; fromAMC?: boolean; bookingMode?: "NORMAL" | "AMC" }
+    | { categoryId?: string; categoryName?: string; assetId?: string; assetName?: string }
     | undefined;
   TicketHistory: undefined;
   CustomerTicketDetails: { ticketId: string };
-  LiveTracking: { ticketId: string; ticketNumber?: string; hasFeedback?: boolean };
   PaymentHistory: undefined;
   InvoiceList: undefined;
   InvoiceDetails: { invoiceId: string };
@@ -34,6 +33,7 @@ export type CustomerStackParamList = {
   AddressBook: { onSelectAddress?: (address: Address) => void; selectedAddressId?: string } | undefined;
   NotificationList: undefined;
   CustomerAssets: undefined;
+  CustomerAssetDetail: { assetId: string };
   MyAmc: undefined;
   AmcDetails: { subscriptionId: string };
 };

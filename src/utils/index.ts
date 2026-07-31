@@ -43,73 +43,83 @@ export function getWarrantyStatus(warrantyExpiresAt: string | null | undefined):
 }
 
 /**
- * Maps login API errors to user-friendly authentication error messages according to BUG-TECH-LOGIN-001 requirements.
+ * Maps login API errors to user-friendly authentication error messages according to UX guidelines.
  */
 export function getFriendlyAuthErrorMessage(err: any): string {
+  if (!err) {
+    return "Something went wrong. Please try again.";
+  }
+
   const status = err?.status ?? err?.response?.status;
+  const code = String(err?.code || err?.originalError?.code || "").toUpperCase();
   const rawMsg = typeof err === "string" ? err : (err?.message || err?.response?.data?.message || "");
   const msg = rawMsg.toLowerCase();
 
-  // 1. Network failures (Network OFF, offline, timeout, status 0, Network Error)
-  const isNetworkFailure =
-    status === 0 ||
-    msg.includes("network error") ||
-    msg.includes("network") ||
-    msg.includes("fetch") ||
-    msg.includes("connect") ||
-    msg.includes("econnrefused") ||
+  // 1. Timeout Case
+  const isTimeout =
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
     msg.includes("timeout") ||
-    msg.includes("offline");
+    msg.includes("timed out");
 
-  if (isNetworkFailure) {
-    return "Unable to connect. Please check your internet connection.";
+  if (isTimeout) {
+    return "Connection timed out. Please check your network and try again.";
   }
 
-  // 2. Server Errors (HTTP 500, 502, 503, 504, etc.)
-  if (typeof status === "number" && status >= 500) {
-    return "Something went wrong.";
+  // 2. Network Error / No Internet Case (offline, network error, no response status)
+  const isNetworkError =
+    code === "ERR_NETWORK" ||
+    msg.includes("network error") ||
+    msg.includes("no internet") ||
+    msg.includes("net::err") ||
+    msg.includes("offline") ||
+    (status === 0 && !isTimeout) ||
+    (!status && (msg.includes("failed to fetch") || msg.includes("econnrefused") || msg.includes("network")));
+
+  if (isNetworkError) {
+    return "Please check your internet connection and try again.";
   }
 
-  // 3. User / Account not found / Email not registered
+  // 3. Server Errors (HTTP 500, 502, 503, 504, 5xx)
+  if (typeof status === "number" && status >= 500 && status < 600) {
+    return "Service is temporarily unavailable. Please try again in a few moments.";
+  }
+
+  // 4. HTTP 404 - Account / User not found
   const isUserNotFound =
     status === 404 ||
+    msg.includes("no account found") ||
     msg.includes("user not found") ||
     msg.includes("customer not found") ||
     msg.includes("technician not found") ||
-    msg.includes("email not registered") ||
     msg.includes("account not found") ||
-    msg.includes("no account") ||
-    msg.includes("no user") ||
-    msg.includes("does not exist") ||
+    msg.includes("email not registered") ||
     msg.includes("not registered");
 
   if (isUserNotFound) {
-    return "No account found with this email address.";
+    return "No account found with this email address. Please check your email or register.";
   }
 
-  // 4. Authentication / Credential / 401 errors
+  // 5. HTTP 401 / Authentication Error
   const isAuthError =
     status === 401 ||
-    msg.includes("invalid") ||
-    msg.includes("credential") ||
-    msg.includes("password") ||
+    msg.includes("invalid email or password") ||
+    msg.includes("invalid password") ||
     msg.includes("unauthorized") ||
-    msg.includes("authentication failed") ||
-    msg.includes("auth failed") ||
-    msg.includes("incorrect") ||
-    msg.includes("failed");
+    msg.includes("invalid credentials") ||
+    msg.includes("authentication failed");
 
   if (isAuthError) {
-    return "Invalid email or password.";
+    return "Invalid email or password. Please check your credentials and try again.";
   }
 
-  // Fallback for any other client errors (400-499)
+  // Fallback for 400-499 client errors (except 404 handled above)
   if (typeof status === "number" && status >= 400 && status < 500) {
-    return "Invalid email or password.";
+    return "Invalid email or password. Please check your credentials and try again.";
   }
 
-  // Server error fallback
-  return "Something went wrong.";
+  // Fallback for any other unknown errors
+  return "Something went wrong. Please try again.";
 }
 
 export * from "./location";

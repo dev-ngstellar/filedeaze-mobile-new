@@ -44,6 +44,7 @@ export const LoginScreen = () => {
   const passwordInputRef = useRef<TextInput>(null);
 
   const [validationPopupVisible, setValidationPopupVisible] = useState(false);
+  const [validationPopupTitle, setValidationPopupTitle] = useState("Sign In Help");
   const [validationPopupMsg, setValidationPopupMsg] = useState("");
 
   const {
@@ -88,14 +89,16 @@ export const LoginScreen = () => {
 
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!cleanEmail || !emailRegex.test(cleanEmail)) {
-      setValidationPopupMsg("Please enter a valid email address.");
+      setValidationPopupTitle("Email Required");
+      setValidationPopupMsg("Please enter a valid email address to sign in.");
       setValidationPopupVisible(true);
       trigger("email");
       return;
     }
 
     if (!cleanPassword) {
-      setValidationPopupMsg("Password is required.");
+      setValidationPopupTitle("Password Required");
+      setValidationPopupMsg("Please enter your password to sign in.");
       setValidationPopupVisible(true);
       trigger("password");
       return;
@@ -105,6 +108,7 @@ export const LoginScreen = () => {
       await login(cleanEmail, cleanPassword);
     } catch (err: any) {
       const friendlyMsg = getFriendlyAuthErrorMessage(err);
+      setValidationPopupTitle("Sign In Failed");
       setValidationPopupMsg(friendlyMsg);
       setValidationPopupVisible(true);
     }
@@ -226,7 +230,8 @@ export const LoginScreen = () => {
       <Modal visible={validationPopupVisible} transparent animationType="fade" onRequestClose={() => setValidationPopupVisible(false)}>
         <View style={styles.popupOverlay}>
           <View style={[styles.popupCard, { backgroundColor: theme.colors.card }]}>
-            <Text style={[styles.popupMessage, { color: theme.colors.text }]}>{validationPopupMsg}</Text>
+            <Text style={[styles.popupTitle, { color: theme.colors.text }]}>{validationPopupTitle}</Text>
+            <Text style={[styles.popupMessage, { color: theme.colors.textMuted }]}>{validationPopupMsg}</Text>
             <TouchableOpacity
               style={[styles.popupBtn, { backgroundColor: theme.colors.primary }]}
               onPress={() => setValidationPopupVisible(false)}
@@ -350,9 +355,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 12,
   },
+  popupTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 8,
+  },
   popupMessage: {
     fontSize: 14,
-    lineHeight: 22,
+    lineHeight: 20,
     textAlign: "center",
     marginBottom: 20,
     fontWeight: "500",

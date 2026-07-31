@@ -63,7 +63,7 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
   const handleCall = () => {
     if (ticket.customerMobile) {
       Linking.openURL(`tel:${ticket.customerMobile}`).catch(() => {
-        Alert.alert("Error", "Could not place phone call.");
+        Alert.alert("Unable to Call", "Could not place phone call. Please check your phone settings.");
       });
     }
   };

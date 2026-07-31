@@ -34,16 +34,34 @@ export class AuthService {
       const handleFailure = (err: any) => {
         rejectedCount++;
         const statusCode = err.response?.status || err.status;
+        const errorCode = err.code || err.originalError?.code;
         const errorMessage = err.response?.data?.message || err.message;
-        errors.push({ status: statusCode, message: errorMessage, originalError: err });
+        errors.push({ status: statusCode, code: errorCode, message: errorMessage, originalError: err });
+
         if (rejectedCount === 2 && !resolved) {
-          // Both failed, throw user-friendly error
+          const getPriority = (e: any) => {
+            const s = e.status;
+            const c = String(e.code || e.originalError?.code || "").toUpperCase();
+            const m = String(e.message || "").toLowerCase();
+
+            if (typeof s === "number" && s >= 500) return 100;
+            if (c === "ECONNABORTED" || c === "ETIMEDOUT" || m.includes("timeout")) return 90;
+            if (c === "ERR_NETWORK" || m.includes("network") || (!s && m.includes("connect"))) return 80;
+            if (s === 404) return 70;
+            if (s === 401) return 60;
+            if (typeof s === "number") return 50;
+            return 10;
+          };
+
           const firstErr = errors[0];
           const secondErr = errors[1];
-          const msg = firstErr.message === secondErr.message ? firstErr.message : `${firstErr.message} / ${secondErr.message}`;
-          const customErr: any = new Error(msg || "Invalid credentials.");
-          customErr.status = firstErr.status || secondErr?.status;
-          customErr.response = firstErr.originalError?.response || secondErr?.originalError?.response;
+          const primaryErr = getPriority(secondErr) > getPriority(firstErr) ? secondErr : firstErr;
+
+          const msg = primaryErr.message || "Authentication failed.";
+          const customErr: any = new Error(msg);
+          customErr.status = primaryErr.status;
+          customErr.code = primaryErr.code || primaryErr.originalError?.code;
+          customErr.response = primaryErr.originalError?.response || primaryErr.originalError;
           reject(customErr);
         }
       };

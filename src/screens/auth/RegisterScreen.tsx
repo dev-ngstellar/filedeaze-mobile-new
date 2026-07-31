@@ -100,7 +100,7 @@ export const RegisterScreen = () => {
       });
       const firstErrorMsg = Object.values(formErrors)[0];
       setError(firstErrorMsg);
-      Alert.alert("Validation Error", firstErrorMsg);
+      Alert.alert("Information Required", firstErrorMsg);
       return;
     }
 
@@ -136,18 +136,18 @@ export const RegisterScreen = () => {
       const dataMsg = (err?.response?.data?.message || err?.data?.message || "").toLowerCase();
       const fullErr = `${msg} ${dataMsg}`;
 
-      let friendlyMsg = "Something went wrong. Please try again.";
+      let friendlyMsg = "Registration could not be completed. Please try again.";
 
       if (fullErr.includes("email") && (fullErr.includes("exist") || fullErr.includes("already") || fullErr.includes("registered") || status === 409)) {
-        friendlyMsg = "This email is already registered.";
+        friendlyMsg = "This email is already registered. Please sign in or use a different email.";
         setFormError("email", { type: "manual", message: friendlyMsg });
       } else if ((fullErr.includes("mobile") || fullErr.includes("phone")) && (fullErr.includes("exist") || fullErr.includes("already") || fullErr.includes("registered") || status === 409)) {
-        friendlyMsg = "This mobile number is already registered.";
+        friendlyMsg = "This mobile number is already registered. Please check your number or sign in.";
         setFormError("mobile", { type: "manual", message: friendlyMsg });
       } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("connect") || msg.includes("econnrefused") || status === 0) {
-        friendlyMsg = "Unable to connect. Please check your internet connection.";
+        friendlyMsg = "Please check your internet connection and try again.";
       } else {
-        friendlyMsg = "Something went wrong. Please try again.";
+        friendlyMsg = "Registration could not be completed. Please try again.";
       }
 
       setError(friendlyMsg);

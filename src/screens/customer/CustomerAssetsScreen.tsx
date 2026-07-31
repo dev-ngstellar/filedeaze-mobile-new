@@ -19,6 +19,7 @@ import { useCustomerAssets } from "../../hooks/useCustomer";
 import { useMyAmcSubscriptions, useActiveAmcSubscriptionForAsset } from "../../hooks/useAmc";
 import { CustomerAsset } from "../../services/customer.service";
 import { CustomerStackParamList } from "../../types/navigation.types";
+import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
 import { AppEmptyState } from "../../components/AppEmptyState";
 import { AMCBadge } from "../../components/amc/AMCBadge";
@@ -74,8 +75,6 @@ const EquipmentCategoryCard: React.FC<{ asset: CustomerAsset }> = ({ asset }) =>
     navigation.navigate("RaiseTicket", {
       assetId: asset.id,
       assetName: asset.name,
-      bookingMode: "AMC",
-      fromAMC: true,
     });
   };
 
@@ -86,8 +85,11 @@ const EquipmentCategoryCard: React.FC<{ asset: CustomerAsset }> = ({ asset }) =>
         { backgroundColor: theme.colors.card, borderColor: theme.colors.borderLight },
       ]}
     >
-      {/* Top Header Row: Asset Thumbnail + Name + AMC Status Badge */}
-      <View style={styles.assetCardHeaderRow}>
+      {/* Top Header Row: Asset Thumbnail + Name + AMC Status Badge (Tapping opens Asset Details) */}
+      <Pressable
+        onPress={() => navigation.navigate("CustomerAssetDetail", { assetId: asset.id })}
+        style={({ pressed }) => [styles.assetCardHeaderRow, pressed && { opacity: 0.85 }]}
+      >
         <View style={[styles.assetThumbBox, { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight }]}>
           <Image
             source={{ uri: showUploadedImage ? firstImageUrl! : getAssetCategoryFallbackImage(asset.name) }}
@@ -109,11 +111,11 @@ const EquipmentCategoryCard: React.FC<{ asset: CustomerAsset }> = ({ asset }) =>
         </View>
         <View style={styles.assetBadgeContainer}>
           <AMCBadge
-            label={asset.hasActiveAmc ? (isExpired ? "Expired" : "AMC Active") : "No AMC"}
+            label={asset.hasActiveAmc ? (isExpired ? "Expired" : "🟢 Active AMC") : "⚪ No AMC"}
             active={asset.hasActiveAmc && !isExpired}
           />
         </View>
-      </View>
+      </Pressable>
 
       {/* AMC Plan Details Box (if asset has AMC coverage) */}
       {asset.hasActiveAmc && (
@@ -166,61 +168,6 @@ const EquipmentCategoryCard: React.FC<{ asset: CustomerAsset }> = ({ asset }) =>
         </View>
       )}
 
-      {/* Primary Action Button: [Raise Ticket] or [Quota Exhausted Banner] */}
-      {canRaiseTicket ? (
-        <Pressable
-          onPress={handleRaiseTicket}
-          style={({ pressed }) => [
-            styles.raiseTicketGradientWrap,
-            pressed && { opacity: 0.92, transform: [{ scale: 0.985 }] },
-          ]}
-        >
-          <LinearGradient
-            colors={[theme.colors.primary, "#3b82f6"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.raiseTicketGradient}
-          >
-            <View style={styles.actionIconCircle}>
-              <PlusCircle size={15} color="#ffffff" />
-            </View>
-            <Text style={styles.raiseTicketText}>Raise Ticket</Text>
-            <View style={styles.arrowIconCircle}>
-              <ChevronRight size={14} color="#ffffff" />
-            </View>
-          </LinearGradient>
-        </Pressable>
-      ) : (
-        <View
-          style={[
-            styles.disabledStatusBanner,
-            {
-              backgroundColor: isExhausted || isExpired ? "#fff5f5" : "#f8fafc",
-              borderColor: isExhausted || isExpired ? "#fed7d7" : "#e2e8f0",
-            },
-          ]}
-        >
-          <AlertCircle
-            size={18}
-            color={isExhausted || isExpired ? "#e53e3e" : theme.colors.textMuted}
-            style={{ marginTop: 1 }}
-          />
-          <Text
-            style={[
-              styles.disabledStatusText,
-              {
-                color: isExhausted || isExpired ? "#c53030" : theme.colors.textMuted,
-              },
-            ]}
-          >
-            {isExhausted
-              ? "Quota Exhausted — Please contact your administrator to renew your AMC plan (0 Visits Remaining)"
-              : isExpired
-              ? "AMC Plan Expired"
-              : "No Active AMC Coverage"}
-          </Text>
-        </View>
-      )}
     </View>
   );
 };
@@ -304,6 +251,7 @@ const TopAmcPlanBanner: React.FC = () => {
 
 export const CustomerAssetsScreen = () => {
   const theme = useTheme();
+  const navigation = useNavigation<NavigationProp>();
   const {
     data: assets = [],
     isLoading,
@@ -357,6 +305,7 @@ export const CustomerAssetsScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <AppHeader title="My Assets" showBack onBackPress={() => navigation.goBack()} />
       <FlatList
         data={filteredAssets}
         keyExtractor={(item) => item.id}
@@ -372,19 +321,6 @@ export const CustomerAssetsScreen = () => {
         }
         ListHeaderComponent={
           <View style={{ marginBottom: 16 }}>
-            {/* Registered Equipment Header */}
-            <View style={styles.headerBlock}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
-                  Registered Equipment
-                </Text>
-                <Sparkles size={16} color={theme.colors.primary} />
-              </View>
-              <Text style={[styles.headerSubtitle, { color: theme.colors.textMuted }]}>
-                Select an equipment to raise a service request.
-              </Text>
-            </View>
-
             {/* Search Bar */}
             <View
               style={[

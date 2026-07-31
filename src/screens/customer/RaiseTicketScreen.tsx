@@ -66,9 +66,9 @@ import { AppInput } from "../../components/AppInput";
 import { AppCard } from "../../components/AppCard";
 import { AppLoader } from "../../components/AppLoader";
 import { CustomerPopup } from "../../components/CustomerPopup";
-import { AMCServiceModal } from "../../components/amc/AMCServiceModal";
 import { AMCBadge } from "../../components/amc/AMCBadge";
 import { isMeaningfulDescription } from "../../utils/textUtils";
+import { prepareImageForUpload, prepareMediaForUpload } from "../../utils/mediaUpload";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "RaiseTicket">;
 
@@ -177,11 +177,8 @@ export const RaiseTicketScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProp<CustomerStackParamList, "RaiseTicket">>();
-  const { categoryId, categoryName, assetId, assetName, contractId, fromAMC, bookingMode: initialBookingMode } = (route.params || {}) as any;
+  const { categoryId, categoryName, assetId, assetName } = (route.params || {}) as any;
   const isCategoryLocked = !!categoryId;
-  const isAssetLocked = !!assetId;
-  const bookingMode = initialBookingMode || (fromAMC || assetId ? "AMC" : "NORMAL");
-  const isAmcBooking = bookingMode === "AMC" || !!fromAMC;
 
   const { width: windowWidth } = useWindowDimensions();
   const isLargeScreen = windowWidth >= 550;
@@ -191,42 +188,20 @@ export const RaiseTicketScreen = () => {
   const { data: assets = [], isLoading: isLoadingAssets } = useCustomerAssets();
   const raiseTicketMutation = useRaiseCustomerTicket();
 
-  // Asset selection & AMC service-type states
+  // Optional asset selection & active AMC subscription lookup
   const [selectedAsset, setSelectedAsset] = useState<CustomerAsset | null>(null);
   const { data: activeSub } = useActiveAmcSubscriptionForAsset(selectedAsset?.hasActiveAmc ? selectedAsset.id : "");
   const [assetDropdownVisible, setAssetDropdownVisible] = useState(false);
-  const [isAmcRequest, setIsAmcRequest] = useState(false);
-  const [amcModalVisible, setAmcModalVisible] = useState(false);
-  const amcPromptedForAssetId = useRef<string | null>(null);
 
-  // Pre-select the asset & category passed in via navigation params once assets/categories list loads (AMC mode only)
+  // Pre-select asset if passed via navigation route params
   useEffect(() => {
-    if (!isAmcBooking) {
-      setSelectedAsset(null);
-      setIsAmcRequest(false);
-      return;
-    }
-    setIsAmcRequest(true);
     if (assetId && assets.length > 0 && selectedAsset?.id !== assetId) {
       const found = assets.find((a) => a.id === assetId);
       if (found) {
         setSelectedAsset(found);
       }
     }
-  }, [isAmcBooking, assetId, assets]);
-
-  // Whenever a non-AMC asset becomes selected, update isAmcRequest
-  useEffect(() => {
-    if (isAmcBooking || fromAMC) return;
-    if (!selectedAsset || !selectedAsset.hasActiveAmc) {
-      setIsAmcRequest(false);
-      return;
-    }
-    if (amcPromptedForAssetId.current !== selectedAsset.id) {
-      amcPromptedForAssetId.current = selectedAsset.id;
-      setAmcModalVisible(true);
-    }
-  }, [selectedAsset, isAmcBooking, fromAMC]);
+  }, [assetId, assets]);
 
   // Address Book API hooks
   const { data: addresses = [], isLoading: isLoadingAddresses, refetch: refetchAddresses } = useCustomerAddresses();
@@ -243,10 +218,21 @@ export const RaiseTicketScreen = () => {
   const [preferredTimeSlot, setPreferredTimeSlot] = useState("");
   const [visitType, setVisitType] = useState<"IMMEDIATE" | "SCHEDULED">("IMMEDIATE");
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
-  const [images, setImages] = useState<{ uri: string; type: "image" | "video" }[]>([]);
+  const [images, setImages] = useState<{ uri: string; type: "image" | "video"; source?: "CAMERA" | "GALLERY"; rawAsset?: any }[]>([]);
   const [imageNotes, setImageNotes] = useState("");
 
+  // Filter customer assets to only show assets belonging to the currently selected service category
+  const filteredAssets = useMemo(() => {
+    if (!selectedCat?.id) return assets;
+    return assets.filter((asset) => asset.categoryId === selectedCat.id || !asset.categoryId);
+  }, [assets, selectedCat]);
 
+  // Reset selected asset if the category changes to one that does not match the asset
+  useEffect(() => {
+    if (selectedAsset && selectedCat?.id && selectedAsset.categoryId && selectedAsset.categoryId !== selectedCat.id) {
+      setSelectedAsset(null);
+    }
+  }, [selectedCat, selectedAsset]);
 
   // Address modal states
   const [addressBookVisible, setAddressBookVisible] = useState(false);
@@ -279,12 +265,11 @@ export const RaiseTicketScreen = () => {
     return [line1, line2, line3].filter(Boolean).join("\n");
   };
 
-  // Set default service address (AMC Asset Installation Address vs Customer Profile Address)
+  // Set default service address (Asset Installation Address vs Customer Profile Address)
   useEffect(() => {
-    const isAmcAsset = isAmcBooking || fromAMC || selectedAsset?.hasActiveAmc || isAmcRequest;
     const installationAddrStr = selectedAsset?.installationAddress?.trim();
 
-    if (isAmcAsset && installationAddrStr) {
+    if (installationAddrStr) {
       const installationAddr: Address = {
         id: `installation_${selectedAsset?.id || "default"}`,
         label: "Installation Address",
@@ -315,7 +300,7 @@ export const RaiseTicketScreen = () => {
         setSelectedAddress(profileAddr);
       }
     }
-  }, [selectedAsset, isAmcBooking, fromAMC, isAmcRequest, profile]);
+  }, [selectedAsset, profile]);
 
   // Subcategories fetched dynamically based on selected Category
   // The catalog endpoint returns { subCategories: [...with serviceCharges] }
@@ -521,10 +506,8 @@ export const RaiseTicketScreen = () => {
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    if (!isAmcBooking) {
-      if (!selectedCat) newErrors.category = "Category is required";
-      if (!selectedSub) newErrors.subCategory = "Sub Category is required";
-    }
+    if (!selectedCat) newErrors.category = "Category is required";
+    if (!selectedSub) newErrors.subCategory = "Sub Category is required";
     if (!description.trim() || !isMeaningfulDescription(description)) {
       newErrors.description = "Please enter a meaningful problem description.";
     }
@@ -547,22 +530,29 @@ export const RaiseTicketScreen = () => {
   const handlePickFromCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      triggerPopup("warning", "Permission Required", "Camera access is needed to capture issue media.");
+      triggerPopup("warning", "Camera Permission Required", "Please allow camera access to take photos.");
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ["images", "videos"],
-      quality: 0.7,
+      quality: 0.8,
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
       const isVideo = asset.type === "video";
-      const limit = isVideo ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
-      if (asset.fileSize && asset.fileSize > limit) {
-        triggerPopup("warning", "File Too Large", `${isVideo ? "Video" : "Image"} exceeds the maximum allowed size.`);
+      if (isVideo && asset.fileSize && asset.fileSize > 50 * 1024 * 1024) {
+        triggerPopup("warning", "Video Too Large", "This video is too large. Please record a shorter video.");
         return;
       }
-      setImages((p) => [...p, { uri: asset.uri, type: (asset.type === "video" ? "video" : "image") as "image" | "video" }]);
+      setImages((p) => [
+        ...p,
+        {
+          uri: asset.uri,
+          type: (asset.type === "video" ? "video" : "image") as "image" | "video",
+          source: "CAMERA",
+          rawAsset: asset,
+        },
+      ]);
       if (errors.images) setErrors((prev) => ({ ...prev, images: "" }));
     }
   };
@@ -570,21 +560,29 @@ export const RaiseTicketScreen = () => {
   const handleRecordVideo = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      triggerPopup("warning", "Permission Required", "Camera access is needed to record video.");
+      triggerPopup("warning", "Camera Permission Required", "Please allow camera access to record video.");
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: "videos",
-      quality: 0.7,
+      quality: 0.8,
       videoMaxDuration: 60,
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
       if (asset.fileSize && asset.fileSize > 50 * 1024 * 1024) {
-        triggerPopup("warning", "File Too Large", "Video exceeds the maximum allowed size of 50MB.");
+        triggerPopup("warning", "Video Too Large", "This video is too large. Please record a shorter video.");
         return;
       }
-      setImages((p) => [...p, { uri: asset.uri, type: "video" }]);
+      setImages((p) => [
+        ...p,
+        {
+          uri: asset.uri,
+          type: "video",
+          source: "CAMERA",
+          rawAsset: asset,
+        },
+      ]);
       if (errors.images) setErrors((prev) => ({ ...prev, images: "" }));
     }
   };
@@ -592,21 +590,20 @@ export const RaiseTicketScreen = () => {
   const handlePickFromGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      triggerPopup("warning", "Permission Required", "Gallery access is needed to upload issue media.");
+      triggerPopup("warning", "Photo Permission Required", "Please allow photo access to choose images.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images", "videos"],
-      quality: 0.7,
+      quality: 0.8,
       allowsMultipleSelection: true,
       selectionLimit: 5 - images.length,
     });
     if (!result.canceled) {
       const validAssets = result.assets.filter((asset) => {
         const isVideo = asset.type === "video";
-        const limit = isVideo ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
-        if (asset.fileSize && asset.fileSize > limit) {
-          triggerPopup("warning", "File Too Large", `${asset.fileName || "File"} exceeds the maximum allowed size.`);
+        if (isVideo && asset.fileSize && asset.fileSize > 50 * 1024 * 1024) {
+          triggerPopup("warning", "Video Too Large", "This video is too large. Please select a shorter video.");
           return false;
         }
         return true;
@@ -614,9 +611,13 @@ export const RaiseTicketScreen = () => {
       const newMedia = validAssets.map((asset) => ({
         uri: asset.uri,
         type: (asset.type === "video" ? "video" : "image") as "image" | "video",
+        source: "GALLERY" as const,
+        rawAsset: asset,
       }));
       setImages((p) => [...p, ...newMedia].slice(0, 5));
-      if (errors.images) setErrors((prev) => ({ ...prev, images: "" }));
+      if (errors.images && validAssets.length > 0) {
+        setErrors((prev) => ({ ...prev, images: "" }));
+      }
     }
   };
 
@@ -693,7 +694,7 @@ export const RaiseTicketScreen = () => {
       setSelectedAddress(newAddr);
       if (errors.address) setErrors((prev) => ({ ...prev, address: "" }));
     } catch (error: any) {
-      triggerPopup("danger", "Address Error", error?.message || "Failed to save address");
+      triggerPopup("danger", "Address Failed", error?.message || "We couldn't save your address. Please try again.");
     }
   };
 
@@ -705,7 +706,7 @@ export const RaiseTicketScreen = () => {
         setSelectedAddress(null);
       }
     } catch (error: any) {
-      triggerPopup("danger", "Address Error", error?.message || "Failed to delete address");
+      triggerPopup("danger", "Address Failed", error?.message || "We couldn't remove your address. Please try again.");
     }
   };
 
@@ -713,10 +714,10 @@ export const RaiseTicketScreen = () => {
     // Guard: prevent double-tap from sending a second request
     if (raiseTicketMutation.isPending) return;
 
-    if (!isAmcBooking && (!selectedCat || !selectedSub)) {
+    if (!selectedCat || !selectedSub) {
       Alert.alert(
-        "Service Category",
-        "Unable to determine the service category. Please try again."
+        "Category Required",
+        "Please select a service category and sub-category before submitting."
       );
       return;
     }
@@ -728,36 +729,17 @@ export const RaiseTicketScreen = () => {
     if (Object.keys(newErrors).length > 0) {
       const popupMsg = newErrors.description || Object.values(newErrors)[0] || "Please fill in all mandatory fields before submitting.";
       console.log("[RaiseTicketScreen] Validation FAILED:", newErrors);
-      console.log("[RaiseTicketScreen] API Call: NOT CALLED (Blocked by Validation)");
-      triggerPopup("danger", "Validation Error", popupMsg);
+      triggerPopup("danger", "Information Required", popupMsg);
       return;
     }
-
-    const resolvedContractId = contractId || activeSub?.id;
-
-    // Debug logs
-    console.log({
-      isAmcBooking,
-      categoriesLoaded: !isLoadingCats,
-      categoriesCount: categories.length,
-      selectedCat,
-      selectedSub,
-      selectedAsset,
-      resolvedContractId
-    });
 
     try {
       const formData = new FormData();
 
-      // ── Required fields ──────────────────────────────────────────
-      if (!isAmcBooking) {
-        if (selectedCat) {
-          formData.append("categoryId", selectedCat.id);
-        }
-        if (selectedSub) {
-          formData.append("subCategoryId", selectedSub.id);
-        }
-      }
+      // ── Category & Subcategory ────────────────────────────────────
+      formData.append("categoryId", selectedCat.id);
+      formData.append("subCategoryId", selectedSub.id);
+
       formData.append("description", imageNotes
         ? `${description}\n\nImage Notes: ${imageNotes}`
         : description);
@@ -775,11 +757,9 @@ export const RaiseTicketScreen = () => {
       formData.append("serviceAddress", serviceAddress);
       formData.append("priority", "MEDIUM");
 
-      // ── Optional: asset + AMC service type ────────────────────────
+      // ── Optional: Asset Selection ─────────────────────────────────
       if (selectedAsset) {
         formData.append("customerAssetId", selectedAsset.id);
-        const isAmc = isAmcBooking || (selectedAsset.hasActiveAmc && isAmcRequest);
-        formData.append("isAmcRequest", isAmc ? "true" : "false");
       }
 
       // ── Scheduled date/time ─────────────────────────────────────
@@ -807,26 +787,26 @@ export const RaiseTicketScreen = () => {
       const mediaList: { uri: string; name: string; type: string }[] = [];
       for (let idx = 0; idx < images.length; idx++) {
         const item = images[idx];
-        let uploadUri = item.uri;
-        let filename = item.uri.split("/").pop() ?? `media_${idx}.jpg`;
-
-        if (item.type === "image") {
-          uploadUri = await compressImage(item.uri);
-          filename = `ticket_${Date.now()}_${idx}.jpg`;
-        }
-
-        const ext = filename.split(".").pop()?.toLowerCase() ?? "jpg";
-        let mimeType = "image/jpeg";
-        if (item.type === "video") {
-          mimeType = ext === "mp4" ? "video/mp4" : ext === "mov" ? "video/quicktime" : `video/${ext}`;
-        } else {
-          mimeType = "image/jpeg";
-        }
-
-        mediaList.push({ uri: uploadUri, name: filename, type: mimeType });
+        const prepared = await prepareImageForUpload(
+          item.rawAsset || { uri: item.uri, type: item.type },
+          item.source || "GALLERY",
+          idx
+        );
+        mediaList.push({ uri: prepared.uri, name: prepared.name, type: prepared.type });
       }
 
-      mediaList.forEach((media) => {
+      mediaList.forEach((media, mIdx) => {
+        const origUri = images[mIdx]?.uri;
+        const isCompressed = media.uri !== origUri;
+        console.log(`\n[EXECUTION TRACE STEP 5: IMMEDIATELY BEFORE FormData.append()] #${mIdx}`);
+        console.log(`- URI being appended:  ${media.uri}`);
+        console.log(`- File name:           ${media.name}`);
+        console.log(`- Mime type:           ${media.type}`);
+        console.log(`[EXECUTION TRACE STEP 6 VERIFY FORMDATA URI CHOICE]:`);
+        console.log(`- Original URI:   ${origUri}`);
+        console.log(`- Appended URI:   ${media.uri}`);
+        console.log(`- Choice Result:  ${isCompressed ? "B) COMPRESSED URI" : "A) ORIGINAL URI"}`);
+
         formData.append("media", {
           uri: media.uri,
           name: media.name,
@@ -866,17 +846,15 @@ export const RaiseTicketScreen = () => {
     } catch (err: any) {
       triggerPopup(
         "danger",
-        "Submission Error",
-        err?.message || "Something went wrong. Please try again."
+        "Unable to Submit Ticket",
+        err?.message || "We couldn't submit your service request. Please check your connection and try again."
       );
     }
   };
 
   const isFormIncomplete =
-    (isAmcBooking
-      ? (!selectedAsset)
-      : (!selectedCat || !selectedSub)
-    ) ||
+    !selectedCat ||
+    !selectedSub ||
     !description.trim() ||
     (visitType === "SCHEDULED" && (!preferredDate || !preferredTimeSlot)) ||
     !selectedAddress ||
@@ -1075,165 +1053,26 @@ export const RaiseTicketScreen = () => {
 
 
 
-          {isAmcBooking && (
-            <View style={styles.fieldWrapper}>
-              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>Selected Asset & AMC Coverage</Text>
-              <View
-                style={{
-                  backgroundColor: `${theme.colors.primary}08`,
-                  borderWidth: 1.5,
-                  borderColor: `${theme.colors.primary}30`,
-                  borderRadius: 14,
-                  padding: 14,
-                }}
-              >
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={{ fontSize: 15, fontWeight: "800", color: theme.colors.text }}>
-                      {selectedAsset?.name || assetName || "Covered Equipment"}
-                    </Text>
-                    {selectedAsset?.brand || selectedAsset?.model ? (
-                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
-                        {[selectedAsset?.brand, selectedAsset?.model].filter(Boolean).join(" · ")}
-                      </Text>
-                    ) : (
-                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>Registered AMC Asset</Text>
-                    )}
-                  </View>
-                  <AMCBadge label="AMC Active" active />
-                </View>
-
-                {/* AMC Plan Details Breakdown */}
-                {activeSub && (
-                  <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: `${theme.colors.primary}20`, gap: 4 }}>
-                    <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>
-                      Plan: {activeSub.plan?.name || (activeSub as any).planName || "Active AMC Contract"}
-                    </Text>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
-                      <Text style={{ fontSize: 11, color: theme.colors.textMuted, fontWeight: "600" }}>
-                        Visits Remaining: {activeSub.remainingVisits ?? "—"} / {activeSub.contractTotalVisits ?? activeSub.plan?.visitCount ?? (activeSub as any).totalVisits ?? "—"}
-                      </Text>
-                      {activeSub.endDate && (
-                        <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>
-                          Expires: {new Date(activeSub.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-                )}
-              </View>
+          {/* Category */}
+          <View style={styles.fieldWrapper}>
+            <View style={styles.labelRow}>
+              <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Category</Text>
+              <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
             </View>
-          )}
-
-          {/* Asset Picker Modal */}
-          <Modal
-            visible={assetDropdownVisible}
-            transparent
-            animationType="fade"
-            onRequestClose={() => setAssetDropdownVisible(false)}
-          >
-            <Pressable style={styles.modalOverlay} onPress={() => setAssetDropdownVisible(false)}>
-              <Pressable
-                style={[styles.centeredModalContent, { backgroundColor: theme.colors.card, maxHeight: "70%" }]}
-                onPress={(e) => e.stopPropagation()}
-              >
-                <View style={styles.modalHeader}>
-                  <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Select Asset</Text>
-                  <Pressable onPress={() => setAssetDropdownVisible(false)}>
-                    <X size={20} color={theme.colors.textMuted} />
-                  </Pressable>
-                </View>
-                <ScrollView style={{ maxHeight: 360 }}>
-                  <Pressable
-                    style={[styles.subListItem, { padding: 14, marginHorizontal: 16, marginVertical: 6 }]}
-                    onPress={() => {
-                      setSelectedAsset(null);
-                      setAssetDropdownVisible(false);
-                    }}
-                  >
-                    <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: "italic" }}>No asset — general request</Text>
-                  </Pressable>
-                  {assets.length === 0 ? (
-                    <View style={{ alignItems: "center", paddingVertical: 24 }}>
-                      <Text style={{ color: theme.colors.textMuted, fontSize: 12 }}>No registered assets found</Text>
-                    </View>
-                  ) : (
-                    assets.map((item) => {
-                      const isActive = selectedAsset?.id === item.id;
-                      return (
-                        <Pressable
-                          key={item.id}
-                          style={[
-                            styles.subListItem,
-                            {
-                              marginHorizontal: 16,
-                              marginVertical: 4,
-                              padding: 12,
-                              backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background,
-                            },
-                            isActive
-                              ? { borderColor: theme.colors.primary, borderWidth: 1.5 }
-                              : { borderColor: theme.colors.borderLight, borderWidth: 1 },
-                          ]}
-                          onPress={() => {
-                            setSelectedAsset(item);
-                            setAssetDropdownVisible(false);
-                          }}
-                        >
-                          <View style={{ flex: 1 }}>
-                            <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text, fontSize: 13 }]}>
-                              {item.name}
-                            </Text>
-                            {(item.brand || item.model) ? (
-                              <Text style={{ color: theme.colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                                {[item.brand, item.model].filter(Boolean).join(" · ")}
-                              </Text>
-                            ) : null}
-                          </View>
-                          {item.hasActiveAmc ? <AMCBadge label="AMC" active /> : null}
-                        </Pressable>
-                      );
-                    })
-                  )}
-                </ScrollView>
-              </Pressable>
-            </Pressable>
-          </Modal>
-
-          {/* AMC vs Normal Service choice modal */}
-          <AMCServiceModal
-            visible={amcModalVisible}
-            planName={undefined}
-            onClose={() => setAmcModalVisible(false)}
-            onConfirm={(isAmc) => {
-              setIsAmcRequest(isAmc);
-              setAmcModalVisible(false);
-            }}
-          />
-
-          {/* Category & Sub Category Selection (Hidden for AMC Mode) */}
-          {!isAmcBooking && (
-            <>
-              {/* Category */}
-              <View style={styles.fieldWrapper}>
-                <View style={styles.labelRow}>
-                  <Text style={[styles.fieldLabel, { color: theme.colors.textMuted }]}>Category</Text>
-                  <Text style={{ color: theme.colors.danger, fontWeight: "bold" }}> *</Text>
-                </View>
-                <Pressable
-                  style={[
-                    styles.dropdownBtn,
-                    {
-                      backgroundColor: isCategoryLocked ? `${theme.colors.primary}08` : theme.colors.background,
-                      borderColor: isCategoryLocked ? `${theme.colors.primary}30` : theme.colors.borderLight
-                    }
-                  ]}
-                  disabled={isCategoryLocked}
-                  onPress={() => {
-                    setSubModalVisible(false);
-                    setCatModalVisible(true);
-                  }}
-                >
+            <Pressable
+              style={[
+                styles.dropdownBtn,
+                {
+                  backgroundColor: isCategoryLocked ? `${theme.colors.primary}08` : theme.colors.background,
+                  borderColor: isCategoryLocked ? `${theme.colors.primary}30` : theme.colors.borderLight
+                }
+              ]}
+              disabled={isCategoryLocked}
+              onPress={() => {
+                setSubModalVisible(false);
+                setCatModalVisible(true);
+              }}
+            >
                   <View style={styles.dropdownValueWrapper}>
                     {selectedCat && (
                       <View style={styles.iconCircle}>
@@ -1273,7 +1112,7 @@ export const RaiseTicketScreen = () => {
                     ]}
                     onPress={() => {
                       if (!selectedCat) {
-                        triggerPopup("info", "Select Category", "Please select a main category first.");
+                        triggerPopup("info", "Category Required", "Please select a main service category first.");
                         return;
                       }
                       setSubModalVisible(!subModalVisible);
@@ -1452,8 +1291,6 @@ export const RaiseTicketScreen = () => {
                   </View>
                 )}
               </View>
-            </>
-          )}
 
           {/* Description */}
           <View style={styles.fieldWrapper}>
@@ -1478,14 +1315,184 @@ export const RaiseTicketScreen = () => {
           </View>
         </AppCard>
 
-        {/* Card 2 was Preferred Visit Schedule, now merged into Card 1 header */}
+        {/* Card 2: Select Asset (Optional) */}
+        <AppCard style={styles.card}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 1 }}>
+              <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
+                <Text style={styles.stepBadgeText}>2</Text>
+              </View>
+              <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]} numberOfLines={1}>Select Asset (Optional)</Text>
+            </View>
+          </View>
+
+          <View style={[styles.fieldWrapper, { zIndex: 900 }]}>
+            <Text style={[styles.fieldLabel, { color: theme.colors.textMuted, marginBottom: 6 }]}>
+              Linked Equipment / Asset
+            </Text>
+            <View style={{ position: "relative", zIndex: 900 }}>
+              <Pressable
+                style={[
+                  styles.dropdownBtn,
+                  { backgroundColor: theme.colors.background, borderColor: theme.colors.borderLight },
+                  assetDropdownVisible && {
+                    borderBottomLeftRadius: 0,
+                    borderBottomRightRadius: 0,
+                    borderBottomWidth: 0,
+                  }
+                ]}
+                onPress={() => setAssetDropdownVisible(!assetDropdownVisible)}
+              >
+                <View style={styles.dropdownValueWrapper}>
+                  <Text style={[styles.dropdownText, { color: selectedAsset ? theme.colors.text : theme.colors.textLight }]}>
+                    {selectedAsset ? selectedAsset.name : "Select Asset (Optional)"}
+                  </Text>
+                </View>
+                <ChevronDown size={18} color={theme.colors.textMuted} />
+              </Pressable>
+
+              {/* Inline Asset Selection Dropdown */}
+              {assetDropdownVisible && (
+                <View
+                  style={{
+                    position: "relative",
+                    backgroundColor: theme.colors.card,
+                    borderColor: theme.colors.borderLight,
+                    borderWidth: 1.5,
+                    borderTopWidth: 1,
+                    borderTopLeftRadius: 0,
+                    borderTopRightRadius: 0,
+                    borderBottomLeftRadius: 16,
+                    borderBottomRightRadius: 16,
+                    maxHeight: 280,
+                    paddingVertical: 6,
+                  }}
+                >
+                  <ScrollView style={{ maxHeight: 270 }} nestedScrollEnabled>
+                    {filteredAssets.length === 0 ? (
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, textAlign: "center", paddingVertical: 12, fontStyle: "italic" }}>
+                        No assets registered under this service category.
+                      </Text>
+                    ) : null}
+                    {filteredAssets.map((item) => {
+                      const isActive = selectedAsset?.id === item.id;
+                      return (
+                        <Pressable
+                          key={item.id}
+                          style={[
+                            styles.subListItem,
+                            {
+                              marginHorizontal: 12,
+                              marginVertical: 3,
+                              padding: 10,
+                              backgroundColor: isActive ? `${theme.colors.primary}0a` : theme.colors.background,
+                            },
+                            isActive
+                              ? { borderColor: theme.colors.primary, borderWidth: 1.5 }
+                              : { borderColor: theme.colors.borderLight, borderWidth: 1 },
+                          ]}
+                          onPress={() => {
+                            setSelectedAsset(item);
+                            setAssetDropdownVisible(false);
+                          }}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.subItemName, { color: isActive ? theme.colors.primary : theme.colors.text, fontSize: 13 }]}>
+                              {item.name}
+                            </Text>
+                            {(item.brand || item.model) ? (
+                              <Text style={{ color: theme.colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                                {[item.brand, item.model].filter(Boolean).join(" · ")}
+                              </Text>
+                            ) : null}
+                          </View>
+                          {item.hasActiveAmc ? <AMCBadge label="AMC" active /> : null}
+                        </Pressable>
+                      );
+                    })}
+                    {/* Option: Continue without selecting an asset */}
+                    <Pressable
+                      style={[
+                        styles.subListItem,
+                        {
+                          marginHorizontal: 12,
+                          marginVertical: 4,
+                          padding: 12,
+                          backgroundColor: !selectedAsset ? `${theme.colors.primary}0a` : theme.colors.background,
+                          borderColor: !selectedAsset ? theme.colors.primary : theme.colors.borderLight,
+                          borderWidth: 1.5,
+                          borderRadius: 12,
+                        },
+                      ]}
+                      onPress={() => {
+                        setSelectedAsset(null);
+                        setAssetDropdownVisible(false);
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: "700" }}>
+                        Continue without selecting an asset
+                      </Text>
+                    </Pressable>
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* Selected Asset Details + Read-Only AMC Coverage Banner */}
+          {selectedAsset && (
+            <View
+              style={{
+                backgroundColor: selectedAsset.hasActiveAmc ? `${theme.colors.primary}08` : theme.colors.background,
+                borderWidth: 1.5,
+                borderColor: selectedAsset.hasActiveAmc ? `${theme.colors.primary}30` : theme.colors.borderLight,
+                borderRadius: 14,
+                padding: 14,
+                marginTop: 10,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <View style={{ flex: 1, marginRight: 10 }}>
+                  <Text style={{ fontSize: 15, fontWeight: "800", color: theme.colors.text }}>
+                    {selectedAsset.name}
+                  </Text>
+                  {selectedAsset.brand || selectedAsset.model ? (
+                    <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
+                      {[selectedAsset.brand, selectedAsset.model].filter(Boolean).join(" · ")}
+                    </Text>
+                  ) : null}
+                </View>
+                {selectedAsset.hasActiveAmc && <AMCBadge label="AMC Active" active />}
+              </View>
+
+              {/* Display-only AMC Plan details */}
+              {selectedAsset.hasActiveAmc && activeSub && (
+                <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: `${theme.colors.primary}20`, gap: 4 }}>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>
+                    Plan: {activeSub.plan?.name || (activeSub as any).planName || "Active AMC Contract"}
+                  </Text>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
+                    <Text style={{ fontSize: 11, color: theme.colors.textMuted, fontWeight: "600" }}>
+                      Visits Remaining: {activeSub.remainingVisits ?? "—"} / {activeSub.contractTotalVisits ?? activeSub.plan?.visitCount ?? (activeSub as any).totalVisits ?? "—"}
+                    </Text>
+                    {activeSub.endDate && (
+                      <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>
+                        Expires: {new Date(activeSub.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+        </AppCard>
 
         {/* Card 3: Address Details */}
         <AppCard style={styles.card}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-                <Text style={styles.stepBadgeText}>2</Text>
+                <Text style={styles.stepBadgeText}>3</Text>
               </View>
               <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Visit Address</Text>
             </View>
@@ -1574,7 +1581,7 @@ export const RaiseTicketScreen = () => {
         <AppCard style={styles.card}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 18 }}>
             <View style={[styles.stepBadge, { backgroundColor: theme.colors.primary }]}>
-              <Text style={styles.stepBadgeText}>3</Text>
+              <Text style={styles.stepBadgeText}>4</Text>
             </View>
             <Text style={[styles.cardTitle, { color: theme.colors.text, marginBottom: 0 }]}>Media Documentation</Text>
           </View>
@@ -1993,7 +2000,7 @@ export const RaiseTicketScreen = () => {
                       const currentTimeVal = now.getHours() * 60 + now.getMinutes();
 
                       if (selectedTimeVal < currentTimeVal) {
-                        triggerPopup("danger", "Invalid Time", "You cannot select a preferred visit time in the past.");
+                        triggerPopup("warning", "Future Time Required", "Please select a visit time in the future.");
                         return;
                       }
                     }

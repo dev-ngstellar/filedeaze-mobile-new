@@ -7,7 +7,7 @@ import {
   Pressable,
   Animated,
   ActivityIndicator,
-  Linking,
+  Linking,  
   Alert,
 } from "react-native";
 import { useNavigation, useRoute, RouteProp, useFocusEffect } from "@react-navigation/native";

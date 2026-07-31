@@ -356,14 +356,14 @@ export const InvoiceDetailsScreen = () => {
       setDownloading(true);
       const html = generatePDFHtml(invoiceData.invoice, invoiceData.tenant);
       const { uri } = await Print.printToFileAsync({ html });
-      if (Platform.OS === "ios") {
+      if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri);
       } else {
         await Print.printAsync({ uri });
       }
-      showAlert("Success", `Invoice #${invoiceData.invoice.invoiceNumber} is ready.`, "success");
+      showAlert("Invoice Ready", `Invoice #${invoiceData.invoice.invoiceNumber} is ready.`, "success");
     } catch (err: any) {
-      showAlert("Download Failed", err.message || "Failed to generate invoice PDF.", "error");
+      showAlert("Download Failed", "We couldn't generate the invoice document. Please try again.", "error");
     } finally {
       setDownloading(false);
     }
@@ -380,7 +380,7 @@ export const InvoiceDetailsScreen = () => {
         UTI: "com.adobe.pdf",
       });
     } catch (err: any) {
-      showAlert("Share Failed", err.message || "Failed to share invoice.", "error");
+      showAlert("Share Failed", "We couldn't share the invoice document. Please try again.", "error");
     }
   };
 

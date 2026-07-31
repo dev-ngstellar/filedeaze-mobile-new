@@ -108,14 +108,14 @@ export const WorkTimerScreen = () => {
         {/* Action button row */}
         <View style={styles.actions}>
           <AppButton
-            title="Complete Job"
+            title="Complete"
             onPress={() => navigation.navigate("TechnicianJobDetails", { jobId, openCompleteJob: true })}
             variant="success"
             size="lg"
             icon={<CheckCircle size={20} color="#ffffff" />}
           />
           <AppButton
-            title="Mark Pending"
+            title="Pending"
             onPress={() => navigation.navigate("TechnicianJobDetails", { jobId, openMarkPending: true })}
             variant="warning"
             size="lg"
