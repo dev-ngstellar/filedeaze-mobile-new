@@ -166,6 +166,7 @@ export interface Ticket {
   gstPercent?: number;
   closedAt?: string;
   createdAt?: string;
+  assignedAt?: string;
   customerAsset?: {
     id?: string;
     name: string;
@@ -314,6 +315,7 @@ export function normalizeTicket(raw: any): Ticket {
     images: images.map((img: any) => img.imageUrl),
     statusLogs: raw.statusLogs ?? [],
     createdAt: raw.createdAt ?? raw.created_at ?? undefined,
+    assignedAt: raw.assignedAt ?? raw.assigned_at ?? undefined,
     customerAsset: (raw.customerAsset || raw.asset) ? {
       id: raw.customerAsset?.id ?? raw.asset?.id,
       name: raw.customerAsset?.name ?? raw.asset?.name ?? "—",

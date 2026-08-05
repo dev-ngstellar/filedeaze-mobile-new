@@ -284,13 +284,14 @@ export const AssignedJobsScreen = () => {
     let isLocked = false;
     let lockMessage = "";
     
-    if (item.createdAt && (item.status === "ASSIGNED" || item.status === "PENDING" || item.status === "NEW")) {
-      const raisedTime = new Date(item.createdAt).getTime();
+    const assignmentDateStr = item.assignedAt || item.createdAt;
+    if (assignmentDateStr && (item.status === "ASSIGNED" || item.status === "PENDING" || item.status === "NEW")) {
+      const assignedTime = new Date(assignmentDateStr).getTime();
       const currentTime = Date.now();
-      const hoursDifference = (currentTime - raisedTime) / (1000 * 60 * 60);
+      const hoursDifference = (currentTime - assignedTime) / (1000 * 60 * 60);
       if (hoursDifference > 48) {
         isLocked = true;
-        lockMessage = "Time Expired: You can only accept a ticket within 48 hours of it being raised.";
+        lockMessage = "The acceptance period for this ticket has expired. Please contact your manager for reassignment.";
       }
     }
 

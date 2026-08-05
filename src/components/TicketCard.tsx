@@ -75,13 +75,14 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
 
   let isLocked = false;
   let lockMessage = "";
-  if (ticket.createdAt && (ticket.status === "ASSIGNED" || ticket.status === "PENDING" || ticket.status === "NEW_TICKET")) {
-    const raisedTime = new Date(ticket.createdAt).getTime();
+  const assignmentDateStr = ticket.assignedAt || ticket.createdAt;
+  if (assignmentDateStr && (ticket.status === "ASSIGNED" || ticket.status === "PENDING" || ticket.status === "NEW_TICKET")) {
+    const assignedTime = new Date(assignmentDateStr).getTime();
     const currentTime = Date.now();
-    const hoursDifference = (currentTime - raisedTime) / (1000 * 60 * 60);
+    const hoursDifference = (currentTime - assignedTime) / (1000 * 60 * 60);
     if (hoursDifference > 48) {
       isLocked = true;
-      lockMessage = "Time Expired: You can only accept a ticket within 48 hours of it being raised.";
+      lockMessage = "The acceptance period for this ticket has expired. Please contact your manager for reassignment.";
     }
   }
 
@@ -247,7 +248,7 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onPress, style }
       <AppConfirmModal
         visible={modalVisible}
         title="Ticket Locked"
-        message={`This ticket is scheduled for ${ticket.scheduledDate}. You cannot view or accept it until that date.`}
+        message={lockMessage || "The acceptance period for this ticket has expired. Please contact your manager for reassignment."}
         confirmText="Close"
         confirmVariant="warning"
         showCancel={false}

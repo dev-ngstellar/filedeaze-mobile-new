@@ -364,24 +364,26 @@ export const TechnicianJobDetailsScreen = () => {
     }
   }, [completeFormVisible]);
 
-  // Auto-populate price when job data loads
+  // Auto-populate price when job data loads or updates
   useEffect(() => {
-    if (job && !amountStr) {
+    if (!job) return;
+    if (job.isAmcCovered) {
+      setAmountStr("0");
+    } else {
       const defaultAmount = job.serviceCharge ?? job.categoryPrice ?? 0;
-      if (defaultAmount > 0) {
-        setAmountStr(String(defaultAmount));
-      }
+      setAmountStr(String(defaultAmount));
     }
-  }, [job, amountStr]);
+  }, [job?.isAmcCovered, job?.serviceCharge, job?.categoryPrice]);
 
   useEffect(() => {
-    if (job && !labourChargeStr) {
+    if (!job) return;
+    if (job.isAmcCovered) {
+      setLabourChargeStr("0");
+    } else {
       const defaultLabour = (job as any).labourCharge ?? 0;
-      if (defaultLabour > 0) {
-        setLabourChargeStr(String(defaultLabour));
-      }
+      setLabourChargeStr(String(defaultLabour));
     }
-  }, [job, labourChargeStr]);
+  }, [job?.isAmcCovered, (job as any)?.labourCharge]);
 
   // Sync paymentSpareParts with completionSpareParts
   useEffect(() => {
@@ -459,15 +461,16 @@ export const TechnicianJobDetailsScreen = () => {
         return;
       }
 
-      // 2. Check if the ticket was raised within the last 48 hours
-      if (job?.createdAt) {
-        const raisedTime = new Date(job.createdAt).getTime();
+      // 2. Check if the ticket was assigned within the last 48 hours
+      const assignmentDateStr = job?.assignedAt || job?.createdAt;
+      if (assignmentDateStr) {
+        const assignedTime = new Date(assignmentDateStr).getTime();
         const currentTime = Date.now();
-        const hoursDifference = (currentTime - raisedTime) / (1000 * 60 * 60);
+        const hoursDifference = (currentTime - assignedTime) / (1000 * 60 * 60);
 
         if (hoursDifference > 48) {
-          setAlertModalTitle("Time Expired");
-          setAlertModalMessage("You can only accept a ticket within 48 hours of it being raised.");
+          setAlertModalTitle("Ticket Locked");
+          setAlertModalMessage("The acceptance period for this ticket has expired. Please contact your manager for reassignment.");
           setAlertModalVisible(true);
           return;
         }

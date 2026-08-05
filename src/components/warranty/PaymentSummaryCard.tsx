@@ -354,9 +354,9 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
 
 const styles = StyleSheet.create({
   card: { padding: 16 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
-  title: { fontSize: 12, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.5 },
-  amcTag: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 },
+  title: { fontSize: 12, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 1 },
+  amcTag: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8, flexShrink: 0 },
   amcTagText: { fontSize: 10, fontWeight: "700" },
   metaBox: { borderBottomWidth: 1, paddingBottom: 6, marginBottom: 6 },
   metaLabel: { fontSize: 12 },
