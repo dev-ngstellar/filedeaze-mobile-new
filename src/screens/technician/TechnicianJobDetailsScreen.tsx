@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -45,6 +45,8 @@ import {
   ImagePlus,
   ShieldCheck,
   CheckCircle,
+  Banknote,
+  CreditCard,
 } from "lucide-react-native";
 import QRCode from "react-native-qrcode-svg";
 import * as Location from "expo-location";
@@ -64,6 +66,7 @@ import {
   useMarkJobPending,
   useRejectJob,
   useCollectPayment,
+  useRecordCreditPayment,
   usePaymentPreview,
   useUploadTicketImage,
   useTechnicianJobs,
@@ -72,6 +75,7 @@ import {
   useAssignAssetToTicket,
   useCustomerAssetsForTicket,
 } from "../../hooks/useJobs";
+
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
 import { AppCard } from "../../components/AppCard";
@@ -112,6 +116,11 @@ export const TechnicianJobDetailsScreen = () => {
   const [shouldNavigateHome, setShouldNavigateHome] = useState(false);
 
   const { data: job, isLoading, refetch } = useJobDetails(jobId);
+  const isPendingCredit = Boolean(
+    job &&
+    (job.paymentMethod === "CREDIT" || (job as any)?.payment?.method === "CREDIT") &&
+    (job.paymentStatus === "PENDING" || (job as any)?.payment?.status === "PENDING")
+  );
   const { data: attendance } = useAttendanceStatus();
   const { data: allJobs = [] } = useTechnicianJobs();
   const updateStatusMutation = useUpdateJobStatus();
@@ -120,7 +129,9 @@ export const TechnicianJobDetailsScreen = () => {
   const markPendingMutation = useMarkJobPending();
   const rejectJobMutation = useRejectJob();
   const collectPaymentMutation = useCollectPayment();
+  const recordCreditPaymentMutation = useRecordCreditPayment();
   const uploadImageMutation = useUploadTicketImage();
+
   const savePhotosMutation = useSaveBeforePhotos();
   const assignAssetMutation = useAssignAssetToTicket();
 
@@ -194,6 +205,7 @@ export const TechnicianJobDetailsScreen = () => {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [liveDuration, setLiveDuration] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [isCreditSubmitting, setIsCreditSubmitting] = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
 
   // Complete Signature state
@@ -286,16 +298,44 @@ export const TechnicianJobDetailsScreen = () => {
 
   const currencySymbol = paymentConfig?.currency === "INR" ? "₹" : (paymentConfig?.currency || "₹");
 
+  // Existing pending credit amount source of truth:
+  // Prefer invoiceTotal (final grand total on the invoice), then payment amount fields.
+  const existingCreditAmount = useMemo(() => {
+    if (!job) return 0;
+    if (job.invoiceTotal != null && !isNaN(Number(job.invoiceTotal)) && Number(job.invoiceTotal) > 0) {
+      return Number(job.invoiceTotal);
+    }
+    const pInvTotal = (job as any)?.payment?.invoice?.total;
+    if (pInvTotal != null && !isNaN(Number(pInvTotal)) && Number(pInvTotal) > 0) {
+      return Number(pInvTotal);
+    }
+    if (job.paymentCollection != null && !isNaN(Number(job.paymentCollection)) && Number(job.paymentCollection) > 0) {
+      return Number(job.paymentCollection);
+    }
+    const pAmt = (job as any)?.payment?.amount;
+    if (pAmt != null && !isNaN(Number(pAmt)) && Number(pAmt) > 0) {
+      return Number(pAmt);
+    }
+    return 0;
+  }, [job]);
+
+  const handleOpenCollectOutstanding = () => {
+    setPaymentConfirmed(false);
+    setTransactionId("");
+    setTransactionIdError("");
+    setCompleteStep(2);
+    setCompleteFormVisible(true);
+  };
+
   // Everything technician-entered outside the core service charge (named extra items + tenant
   // platform/shipping/handling fees) is billed via the backend's generic additionalCharge bucket.
   const backendAdditionalCharge = extraChargesSum + platformFee + shippingCharge + handlingCharge;
 
-  // Backend-computed breakdown for the payment step — AMC service/labour waivers are applied here,
-  // never on device. Only fetched once the technician has entered a charge and the form is open.
+  // Backend-computed breakdown for the payment step — only used during normal Flow A billing
   const { data: paymentPreview } = usePaymentPreview(
     jobId,
     { serviceCharge: base, labourCharge: labour, additionalCharge: backendAdditionalCharge, discount: discountAmount },
-    completeFormVisible && completeStep === 2
+    completeFormVisible && completeStep === 2 && !isPendingCredit
   );
 
   // Reached Location GPS State
@@ -367,13 +407,17 @@ export const TechnicianJobDetailsScreen = () => {
   // Auto-populate price when job data loads or updates
   useEffect(() => {
     if (!job) return;
+    if (isPendingCredit) {
+      setAmountStr(String(existingCreditAmount));
+      return;
+    }
     if (job.isAmcCovered) {
       setAmountStr("0");
     } else {
       const defaultAmount = job.serviceCharge ?? job.categoryPrice ?? 0;
       setAmountStr(String(defaultAmount));
     }
-  }, [job?.isAmcCovered, job?.serviceCharge, job?.categoryPrice]);
+  }, [job?.isAmcCovered, job?.serviceCharge, job?.categoryPrice, isPendingCredit, existingCreditAmount]);
 
   useEffect(() => {
     if (!job) return;
@@ -1042,10 +1086,62 @@ export const TechnicianJobDetailsScreen = () => {
       }
     }
     if (!paymentConfirmed) {
-      showAlert("Confirm Payment", "Please toggle the payment confirmation before submitting.");
+      showAlert("Confirm Payment", "Please confirm payment collection before submitting.");
       return;
     }
 
+    if (isPendingCredit) {
+      // ==========================================
+      // FLOW B: SETTLE EXISTING PENDING CREDIT PAYMENT
+      // ==========================================
+      setSubmitting(true);
+      try {
+        const payResult = await collectPaymentMutation.mutateAsync({
+          ticketNo: jobId,
+          payload: {
+            serviceCharge: existingCreditAmount,
+            method: paymentMode,
+          },
+        });
+
+        queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+        queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+        queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+        queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+        queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
+        queryClient.invalidateQueries({ queryKey: ["customerPayments"] });
+        queryClient.invalidateQueries({ queryKey: ["customer", "payments"] });
+        queryClient.invalidateQueries({ queryKey: ["customerTickets"] });
+        queryClient.invalidateQueries({ queryKey: ["customerInvoices"] });
+
+        setCompleteFormVisible(false);
+        await refetch();
+
+        // Navigate to Invoice / Receipt with the exact consistent amount
+        navigation.replace("InvoiceGenerate", {
+          jobId: jobId,
+          ticketNo: job?.ticketNo ?? jobId,
+          amount: existingCreditAmount,
+          paymentMethod: paymentMode,
+          invoiceNo: payResult.invoiceNumber || job?.invoiceNo || `INV-${job?.ticketNo ?? jobId}`,
+          invoiceSubtotal: job?.invoiceSubtotal ?? existingCreditAmount,
+          invoiceGstAmount: job?.invoiceGstAmount ?? 0,
+          invoiceGstPercent: job?.invoiceGstPercent ?? 0,
+          invoiceTotal: existingCreditAmount,
+          invoiceGeneratedAt: new Date().toISOString(),
+        });
+      } catch (err: any) {
+        const errorMsg = err?.response?.data?.message || err?.message || "We couldn't record payment settlement. Please check payment details and try again.";
+        showAlert("Settlement Failed", errorMsg);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // ==========================================
+    // FLOW A: NORMAL NEW PAYMENT (NO PENDING CREDIT)
+    // ==========================================
     const sparePartsValidation = validateSparePartDrafts(paymentSpareParts);
     if (sparePartsValidation) {
       setPaymentSparePartsInvalid(sparePartsValidation.invalidIds);
@@ -1061,13 +1157,27 @@ export const TechnicianJobDetailsScreen = () => {
       .filter((p) => p.warrantyStatus === "OUT_OF_WARRANTY")
       .map((p) => ({ sparePartId: p.sparePartId, quantity: p.quantity }));
 
+    if (!job?.isAmcCovered) {
+      const trimmedService = amountStr.trim();
+      if (!trimmedService || isNaN(parseFloat(trimmedService))) {
+        showAlert("Invalid Service Amount", "Please enter a valid service charge amount.");
+        return;
+      }
+      const parsedService = parseFloat(trimmedService);
+      if (parsedService < 0) {
+        showAlert("Invalid Service Amount", "Service charge cannot be negative.");
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
       // 3. Collect payment
+      const serviceChargeToSend = job?.isAmcCovered ? 0 : (parseFloat(amountStr) || 0);
       const payResult = await collectPaymentMutation.mutateAsync({
         ticketNo: jobId,
         payload: {
-          serviceCharge: base,
+          serviceCharge: serviceChargeToSend,
           labourCharge: labour,
           additionalCharge: backendAdditionalCharge,
           discount: discountAmount,
@@ -1077,13 +1187,15 @@ export const TechnicianJobDetailsScreen = () => {
         },
       });
 
-
-
       queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
       queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
       queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
       queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
       queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
+      queryClient.invalidateQueries({ queryKey: ["customerPayments"] });
+      queryClient.invalidateQueries({ queryKey: ["customer", "payments"] });
+      queryClient.invalidateQueries({ queryKey: ["customerTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["customerInvoices"] });
 
       setCompleteFormVisible(false);
       await refetch();
@@ -1102,11 +1214,86 @@ export const TechnicianJobDetailsScreen = () => {
         invoiceGeneratedAt: new Date().toISOString(),
       });
     } catch (err: any) {
-      showAlert("Payment Failed", "We couldn't record payment. Please check payment details and try again.");
+      const errorMsg = err?.response?.data?.message || err?.message || "We couldn't record payment. Please check payment details and try again.";
+      showAlert("Payment Failed", errorMsg);
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleCreditPayLaterPress = () => {
+    const finalAmountToCollect = paymentPreview ? paymentPreview.grandTotal : amount;
+    triggerConfirm(
+      "Confirm Credit / Pay Later",
+      `Are you sure you want to mark ticket #${job?.ticketNo || jobId} as Credit / Pay Later?\n\nAmount: ${currencySymbol}${finalAmountToCollect.toLocaleString("en-IN")}\n\nThis payment will remain outstanding for the customer and will NOT be marked as collected.`,
+      "Confirm Pay Later",
+      "primary",
+      handleCreditPayLaterConfirm
+    );
+  };
+
+  const handleCreditPayLaterConfirm = async () => {
+    if (submitting || isCreditSubmitting) return;
+    setSubmitting(true);
+    setIsCreditSubmitting(true);
+    try {
+      const parsedAmount = parseFloat(amountStr);
+      const defaultServiceCharge = Number(job?.serviceCharge ?? job?.categoryPrice ?? 0);
+      const resolvedServiceCharge = !isNaN(parsedAmount) && parsedAmount > 0
+        ? parsedAmount
+        : defaultServiceCharge;
+      const serviceChargeToSend = job?.isAmcCovered ? 0 : resolvedServiceCharge;
+
+      const labourToSend = job?.isAmcCovered ? 0 : (Number(labour) || 0);
+      const additionalToSend = Number(backendAdditionalCharge) || 0;
+      const discountToSend = Number(discountAmount) || 0;
+
+      const ticketIdToSend = job?.id || jobId;
+
+      await recordCreditPaymentMutation.mutateAsync({
+        ticketNo: ticketIdToSend,
+        payload: {
+          serviceCharge: serviceChargeToSend,
+          labourCharge: labourToSend,
+          additionalCharge: additionalToSend,
+          discount: discountToSend,
+        },
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["technicianTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "details", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", "technician", "list"] });
+      queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
+      queryClient.invalidateQueries({ queryKey: ["customerPayments"] });
+      queryClient.invalidateQueries({ queryKey: ["customer", "payments"] });
+      queryClient.invalidateQueries({ queryKey: ["customerTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["customerInvoices"] });
+
+      setCompleteFormVisible(false);
+      await refetch();
+      const finalAmountDisplay = paymentPreview ? paymentPreview.grandTotal : amount;
+      setSuccessTitle("Credit / Pay Later Recorded");
+      setSuccessMessage(
+        `Ticket #${job?.ticketNo || jobId} has been recorded as outstanding credit (${currencySymbol}${finalAmountDisplay.toLocaleString("en-IN")}).`
+      );
+      setSuccessVisible(true);
+    } catch (err: any) {
+      const rawMessage = err?.response?.data?.message || err?.message;
+      const errorMsg = Array.isArray(rawMessage)
+        ? rawMessage.join(", ")
+        : typeof rawMessage === "string"
+        ? rawMessage
+        : "Could not record Credit / Pay Later. Please check details and try again.";
+      console.error("[Credit / Pay Later Failed]", err?.response?.data || err);
+      showAlert("Action Failed", errorMsg);
+    } finally {
+      setSubmitting(false);
+      setIsCreditSubmitting(false);
+    }
+  };
+
+
   const openPhone = (phoneNumber: string) => {
     Linking.openURL(`tel:${phoneNumber}`);
   };
@@ -1699,52 +1886,142 @@ export const TechnicianJobDetailsScreen = () => {
 
         {/* 5. COMPLETED */}
         {job.status === "COMPLETED" && (
-          <AppCard style={styles.card}>
-            <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>Service Completed</Text>
-            <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
-              Job execution is complete. Please collect payment and generate the customer invoice.
-            </Text>
-            <AppButton
-              title="Collect Payment"
-              variant="success"
-              onPress={() => {
-                setCompleteStep(2);
-                setCompleteFormVisible(true);
-              }}
-            />
+          <AppCard style={[styles.card, isPendingCredit && { borderColor: `${theme.colors.warning}50`, borderWidth: 1.5, backgroundColor: `${theme.colors.warning}06` }]}>
+            <Text style={[styles.actionCardTitle, { color: theme.colors.text }]}>Job Completed</Text>
+            {isPendingCredit ? (
+              <View>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.warning, alignItems: "center", justifyContent: "center" }}>
+                      <CreditCard size={18} color="#ffffff" />
+                    </View>
+                    <View>
+                      <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.text }}>
+                        Payment Status
+                      </Text>
+                      <Text style={{ fontSize: 12, color: theme.colors.warning, fontWeight: "700" }}>
+                        Credit / Pay Later
+                      </Text>
+                    </View>
+                  </View>
+                  <AppBadge label="Payment Pending" variant="warning" />
+                </View>
+
+                <View style={{ backgroundColor: theme.colors.card, borderRadius: 12, padding: 14, marginVertical: 8, borderWidth: 1, borderColor: theme.colors.borderLight }}>
+                  <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Outstanding Amount</Text>
+                  <Text style={{ fontSize: 22, fontWeight: "800", color: theme.colors.warning, marginTop: 4 }}>
+                    {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 6, lineHeight: 17 }}>
+                    This ticket has an outstanding Credit / Pay Later balance. Tap below to collect payment from the customer.
+                  </Text>
+                </View>
+
+                <AppButton
+                  title="Collect Outstanding Payment"
+                  variant="success"
+                  icon={<Banknote size={16} color="#ffffff" />}
+                  onPress={handleOpenCollectOutstanding}
+                  style={{ marginTop: 6 }}
+                />
+              </View>
+            ) : (
+              <>
+                <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 16 }}>
+                  Job execution is complete. Please collect payment from the customer or mark this ticket as Credit / Pay Later.
+                </Text>
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <AppButton
+                    title="Credit / Pay Later"
+                    variant="outline"
+                    style={{ flex: 1, borderColor: theme.colors.warning }}
+                    textStyle={{ color: theme.colors.warning }}
+                    onPress={() => {
+                      setCompleteStep(2);
+                      setCompleteFormVisible(true);
+                    }}
+                  />
+                  <AppButton
+                    title="Collect Payment"
+                    variant="success"
+                    style={{ flex: 1.2 }}
+                    onPress={() => {
+                      setCompleteStep(2);
+                      setCompleteFormVisible(true);
+                    }}
+                  />
+                </View>
+              </>
+            )}
           </AppCard>
         )}
 
-        {/* 6. TICKET_CLOSED / INVOICE_GENERATED — real persisted invoice/payment fields only,
-             never back-calculated (there used to be a base-price-minus-subtotal approximation
-             here to guess a spare-parts amount; that's gone now that the backend exposes the
-             real per-line invoice fields). */}
+        {/* 6. TICKET_CLOSED / INVOICE_GENERATED */}
         {(job.status === "TICKET_CLOSED" || job.status === "INVOICE_GENERATED") && (() => {
           const invDate = job.invoiceGeneratedAt ? new Date(job.invoiceGeneratedAt).toLocaleDateString("en-IN") : "—";
           const invNum = job.invoiceNo || `INV-${job.ticketNo}`;
 
           return (
             <View>
-              <AppCard style={[styles.card, { marginBottom: 16 }]}>
-                <View style={[styles.successBanner, { backgroundColor: `${theme.colors.success}10`, borderColor: theme.colors.success }]}>
-                  <CheckCircle2 size={24} color={theme.colors.success} style={{ marginRight: 8 }} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: theme.colors.success, fontWeight: "700", fontSize: 14 }}>
-                      Ticket Closed
+              {isPendingCredit ? (
+                <AppCard style={[styles.card, { marginBottom: 16, borderColor: `${theme.colors.warning}60`, borderWidth: 1.5, backgroundColor: `${theme.colors.warning}08` }]}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.warning, alignItems: "center", justifyContent: "center" }}>
+                        <CreditCard size={18} color="#ffffff" />
+                      </View>
+                      <View>
+                        <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.text }}>
+                          Payment Status
+                        </Text>
+                        <Text style={{ fontSize: 12, color: theme.colors.warning, fontWeight: "700" }}>
+                          Credit / Pay Later
+                        </Text>
+                      </View>
+                    </View>
+                    <AppBadge label="Payment Pending" variant="warning" />
+                  </View>
+
+                  <View style={{ backgroundColor: theme.colors.card, borderRadius: 12, padding: 14, marginVertical: 8, borderWidth: 1, borderColor: theme.colors.borderLight }}>
+                    <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Outstanding Amount</Text>
+                    <Text style={{ fontSize: 22, fontWeight: "800", color: theme.colors.warning, marginTop: 4 }}>
+                      {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
                     </Text>
-                    <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4 }}>
-                      Invoice successfully generated.
+                    <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 6, lineHeight: 17 }}>
+                      Ticket completed under Credit / Pay Later. Outstanding balance remains pending collection from the customer.
                     </Text>
                   </View>
-                </View>
-              </AppCard>
+
+                  <AppButton
+                    title="Collect Outstanding Payment"
+                    variant="success"
+                    icon={<Banknote size={16} color="#ffffff" />}
+                    onPress={handleOpenCollectOutstanding}
+                    style={{ marginTop: 6 }}
+                  />
+                </AppCard>
+              ) : (
+                <AppCard style={[styles.card, { marginBottom: 16 }]}>
+                  <View style={[styles.successBanner, { backgroundColor: `${theme.colors.success}10`, borderColor: theme.colors.success }]}>
+                    <CheckCircle2 size={24} color={theme.colors.success} style={{ marginRight: 8 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: theme.colors.success, fontWeight: "700", fontSize: 14 }}>
+                        Ticket Closed
+                      </Text>
+                      <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4 }}>
+                        Payment collected and invoice generated.
+                      </Text>
+                    </View>
+                  </View>
+                </AppCard>
+              )}
 
               <PaymentSummaryCard
                 invoiceNumber={invNum}
                 ticketNumber={job.ticketNo}
                 customerName={job.customerName}
-                paymentMode={job.paymentMethod ?? "—"}
-                paymentStatus={job.paymentStatus ?? "Collected"}
+                paymentMode={job.paymentMethod ?? (isPendingCredit ? "CREDIT" : "—")}
+                paymentStatus={job.paymentStatus ?? (isPendingCredit ? "PENDING" : "COLLECTED")}
                 invoiceDate={invDate}
                 serviceCharge={job.invoiceServiceCharge ?? 0}
                 serviceChargeWaived={job.paymentServiceChargeWaived}
@@ -1762,7 +2039,7 @@ export const TechnicianJobDetailsScreen = () => {
                   jobId: job.id,
                   ticketNo: job.ticketNo,
                   amount: job.paymentCollection ?? 0,
-                  paymentMethod: job.paymentMethod ?? "CASH",
+                  paymentMethod: job.paymentMethod ?? (isPendingCredit ? "CREDIT" : "CASH"),
                   invoiceNo: job.invoiceNo ?? `INV-${job.ticketNo}`,
                   invoiceSubtotal: job.invoiceSubtotal,
                   invoiceGstAmount: job.invoiceGstAmount,
@@ -2176,14 +2453,16 @@ export const TechnicianJobDetailsScreen = () => {
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1 }} style={{ width: "100%" }}>
                 {/* Header */}
                 <View style={{ borderBottomWidth: 1, borderColor: theme.colors.borderLight, paddingBottom: 12, marginBottom: 16, flexDirection: "row", alignItems: "center" }}>
-                  {completeStep === 2 && (
+                  {completeStep === 2 && !isPendingCredit && (
                     <Pressable onPress={() => setCompleteStep(1)} style={{ marginRight: 10, padding: 4 }}>
                       <ArrowLeft size={20} color={theme.colors.text} />
                     </Pressable>
                   )}
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.text }}>
-                      {completeStep === 2 ? "Collect Payment" : "Complete Work Order"}
+                      {completeStep === 2
+                        ? (isPendingCredit ? "Collect Outstanding Payment" : "Collect Payment")
+                        : "Complete Work Order"}
                     </Text>
                     <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 2 }}>
                       Ticket: {job?.ticketNo}
@@ -2289,278 +2568,643 @@ export const TechnicianJobDetailsScreen = () => {
 
                 {/* Step 2: Payment UI */}
                 {completeStep === 2 && (
-                  <View style={{ marginBottom: 20 }}>
-                    <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
-                      Billing & Payment
-                    </Text>
-                    <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
+                  isPendingCredit ? (
+                    /* =======================================================
+                       FLOW B: COLLECT OUTSTANDING PAYMENT (EXISTING CREDIT)
+                       ======================================================= */
+                    <View style={{ marginBottom: 20 }}>
+                      <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.warning, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
+                        Collect Outstanding Payment
+                      </Text>
 
-                      {/* Service Charge Input */}
-                      <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>Service Charge ({currencySymbol})</Text>
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          backgroundColor: "#f8fafc",
-                          borderWidth: 1.5,
-                          borderColor: theme.colors.borderLight,
-                          borderRadius: 10,
-                          paddingHorizontal: 12,
-                          height: 46,
-                          gap: 8,
-                          marginTop: 4
-                        }}
-                      >
-                        <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
-                        <TextInput
-                          value={amountStr}
-                          editable={false}
-                          placeholder="0.00"
-                          style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
-                        />
-                      </View>
-
-                      {/* Labour Charge Input (Read-only, fetched from backend) */}
-                      {labour > 0 && (
-                        <>
-                          <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 16, fontSize: 13, fontWeight: "600" }]}>Labour Charge ({currencySymbol})</Text>
-                          <View
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              backgroundColor: "#f8fafc",
-                              borderWidth: 1.5,
-                              borderColor: theme.colors.borderLight,
-                              borderRadius: 10,
-                              paddingHorizontal: 12,
-                              height: 46,
-                              gap: 8,
-                              marginTop: 4
-                            }}
-                          >
-                            <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
-                            <TextInput
-                              value={labourChargeStr}
-                              editable={false}
-                              placeholder="0.00"
-                              style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
-                            />
+                      <View style={{ padding: 16, borderRadius: 16, borderWidth: 1.5, borderColor: `${theme.colors.warning}40`, backgroundColor: theme.colors.card }}>
+                        {/* Ticket info & Pending badge */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                          <View style={{ flex: 1, marginRight: 8 }}>
+                            <Text style={{ fontSize: 11, color: theme.colors.textMuted, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                              Ticket
+                            </Text>
+                            <Text style={{ fontSize: 16, fontWeight: "800", color: theme.colors.text, marginTop: 1 }}>
+                              {job?.ticketNo}
+                            </Text>
                           </View>
-                        </>
-                      )}
+                          <AppBadge label="Payment Pending" variant="warning" />
+                        </View>
 
-                      {/* Read-Only Spare Parts Summary */}
-                      {completionSpareParts.length > 0 && (
-                        <View style={{ marginTop: 16, marginBottom: 4 }}>
-                          <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, marginBottom: 8, fontSize: 13, fontWeight: "600" }]}>
-                            Spare Parts Used
+                        <Text style={{ fontSize: 13, color: theme.colors.textMuted, marginBottom: 4 }}>
+                          Service: <Text style={{ color: theme.colors.text, fontWeight: "600" }}>{job?.service}</Text>
+                        </Text>
+                        {job?.invoiceNo ? (
+                          <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginBottom: 4 }}>
+                            Invoice: <Text style={{ color: theme.colors.text, fontWeight: "600" }}>#{job.invoiceNo}</Text>
                           </Text>
-                          <View style={{ borderRadius: 10, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: "#f8fafc", padding: 12 }}>
-                            {completionSpareParts.map((item, idx) => {
-                              const isWarranty = item.warrantyStatus === "WARRANTY";
-                              const itemTotal = isWarranty ? 0 : item.unitPrice * item.quantity;
-                              return (
-                                <View
-                                  key={item.localId || idx}
-                                  style={{
-                                    flexDirection: "row",
-                                    justifyContent: "space-between",
-                                    alignItems: "center",
-                                    paddingVertical: 6,
-                                    borderBottomWidth: idx === completionSpareParts.length - 1 ? 0 : 1,
-                                    borderColor: theme.colors.borderLight,
-                                  }}
-                                >
-                                  <View style={{ flex: 1, marginRight: 8 }}>
-                                    <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>{item.partName}</Text>
-                                    <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2 }}>
-                                      Qty: {item.quantity} · {currencySymbol}{item.unitPrice.toLocaleString("en-IN")} / unit
-                                    </Text>
-                                  </View>
-                                  <Text
-                                    style={{
-                                      fontSize: 12,
-                                      fontWeight: "700",
-                                      color: isWarranty ? theme.colors.success : theme.colors.text,
-                                    }}
-                                  >
-                                    {isWarranty ? "FREE (Warranty)" : `${currencySymbol}${itemTotal.toLocaleString("en-IN")}`}
-                                  </Text>
-                                </View>
-                              );
-                            })}
+                        ) : null}
+
+                        <View style={[styles.divider, { backgroundColor: theme.colors.borderLight, marginVertical: 12 }]} />
+
+                        {/* Payment Method & Status row */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                          <View>
+                            <Text style={{ fontSize: 11, color: theme.colors.textMuted, fontWeight: "600", textTransform: "uppercase" }}>
+                              Payment Method
+                            </Text>
+                            <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text, marginTop: 2 }}>
+                              Credit / Pay Later
+                            </Text>
+                          </View>
+                          <View style={{ alignItems: "flex-end" }}>
+                            <Text style={{ fontSize: 11, color: theme.colors.textMuted, fontWeight: "600", textTransform: "uppercase" }}>
+                              Status
+                            </Text>
+                            <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.warning, marginTop: 2 }}>
+                              Payment Pending
+                            </Text>
                           </View>
                         </View>
-                      )}
 
-
-
-                      {/* Payment Preview — backend-computed breakdown */}
-                      {paymentPreview ? (
-                        <View style={{ marginTop: 14, marginBottom: 4 }}>
-                          <PaymentSummaryCard
-                            title="Payment Preview"
-                            serviceCharge={paymentPreview.serviceCharge}
-                            serviceChargeWaived={paymentPreview.serviceChargeWaived}
-                            labourCharge={paymentPreview.labourCharge}
-                            labourChargeWaived={paymentPreview.labourChargeWaived}
-                            sparePartsAmount={paymentPreview.sparePartsAmount}
-                            warrantyPartsValue={paymentPreview.warrantyPartsValue}
-                            additionalCharge={paymentPreview.additionalCharge}
-                            discount={paymentPreview.discount}
-                            subtotal={paymentPreview.subtotal}
-                            gstPercent={paymentPreview.gstPercent}
-                            gstAmount={paymentPreview.gstAmount}
-                            grandTotal={paymentPreview.grandTotal}
-                            currency={currencySymbol}
-                            spareParts={
-                              paymentSpareParts.length > 0
-                                ? paymentSpareParts.map((p) => ({
-                                  name: p.partName,
-                                  quantity: p.quantity,
-                                  unitPrice: p.unitPrice,
-                                  coverageType: (p.warrantyStatus ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
-                                }))
-                                : undefined
-                            }
-                          />
+                        {/* Outstanding Amount Callout */}
+                        <View style={{ backgroundColor: `${theme.colors.warning}10`, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: `${theme.colors.warning}30`, marginBottom: 14 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: theme.colors.warning, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Outstanding Amount
+                          </Text>
+                          <Text style={{ fontSize: 28, fontWeight: "900", color: theme.colors.warning, marginTop: 4 }}>
+                            {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: theme.colors.textMuted, marginTop: 4 }}>
+                            This ticket has an outstanding balance of {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} to be collected.
+                          </Text>
                         </View>
-                      ) : null}
 
-                      {/* Mode cash/upi */}
-                      <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>
-                      <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
-                        <Pressable
-                          onPress={() => setPaymentMode("CASH")}
-                          style={{
-                            flex: 1,
-                            height: 48,
-                            borderRadius: 8,
-                            borderWidth: 2,
-                            borderColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.borderLight,
-                            justifyContent: "center",
-                            alignItems: "center",
-                            backgroundColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.card,
-                          }}
-                        >
-                          <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "CASH" ? "#ffffff" : theme.colors.textMuted }}>CASH</Text>
-                        </Pressable>
-                        {paymentConfig?.upiEnabled && (
+                        {/* Payment Mode Selector (Cash / UPI) */}
+                        <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 4, marginBottom: 8, fontSize: 13, fontWeight: "600" }]}>
+                          Collection Mode
+                        </Text>
+                        <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
                           <Pressable
-                            onPress={() => setPaymentMode("UPI")}
+                            onPress={() => setPaymentMode("CASH")}
                             style={{
                               flex: 1,
                               height: 48,
                               borderRadius: 8,
                               borderWidth: 2,
-                              borderColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.borderLight,
+                              borderColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.borderLight,
                               justifyContent: "center",
                               alignItems: "center",
-                              backgroundColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.card,
+                              backgroundColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.card,
                             }}
                           >
-                            <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "UPI" ? "#ffffff" : theme.colors.textMuted }}>UPI</Text>
+                            <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "CASH" ? "#ffffff" : theme.colors.textMuted }}>CASH</Text>
                           </Pressable>
-                        )}
-                      </View>
+                          {paymentConfig?.upiEnabled && (
+                            <Pressable
+                              onPress={() => setPaymentMode("UPI")}
+                              style={{
+                                flex: 1,
+                                height: 48,
+                                borderRadius: 8,
+                                borderWidth: 2,
+                                borderColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.borderLight,
+                                justifyContent: "center",
+                                alignItems: "center",
+                                backgroundColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.card,
+                              }}
+                            >
+                              <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "UPI" ? "#ffffff" : theme.colors.textMuted }}>UPI</Text>
+                            </Pressable>
+                          )}
+                        </View>
 
-                      {paymentMode === "UPI" && (
-                        <View style={{ alignItems: "center", marginVertical: 14, padding: 16, backgroundColor: "#ffffff", borderRadius: 12, borderWidth: 1.5, borderColor: theme.colors.borderLight }}>
-                          {(!paymentConfig || !paymentConfig.upiEnabled) ? (
-                            <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
-                              UPI payment is disabled.
-                            </Text>
-                          ) : !paymentConfig.upiId ? (
-                            <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
-                              UPI not available.
-                            </Text>
-                          ) : (
-                            <>
-                              <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
-                                <QRCode
-                                  value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${paymentPreview ? paymentPreview.grandTotal : amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
-                                  size={130}
+                        {/* UPI QR Code if selected */}
+                        {paymentMode === "UPI" && (
+                          <View style={{ alignItems: "center", marginVertical: 14, padding: 16, backgroundColor: "#ffffff", borderRadius: 12, borderWidth: 1.5, borderColor: theme.colors.borderLight }}>
+                            {(!paymentConfig || !paymentConfig.upiEnabled) ? (
+                              <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                                UPI payment is disabled.
+                              </Text>
+                            ) : !paymentConfig.upiId ? (
+                              <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                                UPI not available.
+                              </Text>
+                            ) : (
+                              <>
+                                <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
+                                  <QRCode
+                                    value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${existingCreditAmount}&cu=${paymentConfig.currency || "INR"}&tn=SettleCredit`}
+                                    size={130}
+                                  />
+                                </View>
+
+                                <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "600", textAlign: "center", paddingHorizontal: 10 }}>
+                                  Scan to Pay {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                                </Text>
+
+                                {paymentConfig.upiAccountName && (
+                                  <Text style={{ fontSize: 11, color: theme.colors.text, marginTop: 4, fontWeight: "500", textAlign: "center" }}>
+                                    Merchant: {paymentConfig.upiAccountName}
+                                  </Text>
+                                )}
+
+                                {paymentConfig.upiId && (
+                                  <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2, textAlign: "center" }}>
+                                    UPI ID: {paymentConfig.upiId}
+                                  </Text>
+                                )}
+                              </>
+                            )}
+
+                            {paymentConfig && paymentConfig.upiId && (
+                              <View style={{ width: "100%", marginTop: 16, borderTopWidth: 1, borderColor: theme.colors.borderLight, paddingTop: 14 }}>
+                                <Text style={[styles.formLabel, { color: theme.colors.text, marginBottom: 8, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                                  UPI Transaction ID (8-35 Characters)<Text style={{ color: theme.colors.danger }}> *</Text>
+                                </Text>
+                                <AppInput
+                                  placeholder="Enter 12-digit transaction ID"
+                                  value={transactionId}
+                                  onChangeText={(val) => {
+                                    setTransactionId(val);
+                                    setTransactionIdError("");
+                                  }}
+                                  error={transactionIdError}
                                 />
                               </View>
+                            )}
+                          </View>
+                        )}
 
-                              <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "600", textAlign: "center", paddingHorizontal: 10 }}>
-                                Scan to Pay {currencySymbol}{(paymentPreview ? paymentPreview.grandTotal : amount).toLocaleString("en-IN")}
-                              </Text>
+                        {/* Amount to Collect */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, backgroundColor: `${theme.colors.success}12`, borderRadius: 12, borderWidth: 1, borderColor: `${theme.colors.success}35`, marginVertical: 8 }}>
+                          <Text style={{ fontSize: 14, fontWeight: "700", color: theme.colors.text }}>
+                            Amount to Collect
+                          </Text>
+                          <Text style={{ fontSize: 22, fontWeight: "900", color: theme.colors.success }}>
+                            {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                          </Text>
+                        </View>
 
-                              {paymentConfig.upiAccountName && (
-                                <Text style={{ fontSize: 11, color: theme.colors.text, marginTop: 4, fontWeight: "500", textAlign: "center" }}>
-                                  Merchant: {paymentConfig.upiAccountName}
-                                </Text>
-                              )}
+                        {/* Confirmation Checkbox */}
+                        <Pressable
+                          onPress={() => setPaymentConfirmed(!paymentConfirmed)}
+                          style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 12, paddingHorizontal: 4 }}
+                        >
+                          <View
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: 6,
+                              borderWidth: 2,
+                              borderColor: paymentConfirmed ? theme.colors.success : theme.colors.border,
+                              backgroundColor: paymentConfirmed ? theme.colors.success : theme.colors.card,
+                              justifyContent: "center",
+                              alignItems: "center",
+                            }}
+                          >
+                            {paymentConfirmed && (
+                              <CheckCircle size={14} color="#ffffff" />
+                            )}
+                          </View>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600", flex: 1 }}>
+                            Confirm collection of {currencySymbol}{existingCreditAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} has been received via {paymentMode}.
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    /* =======================================================
+                       FLOW A: NORMAL BILLING & PAYMENT (NO PENDING CREDIT)
+                       ======================================================= */
+                    <View style={{ marginBottom: 20 }}>
+                      <Text style={{ fontSize: 13, fontWeight: "800", color: theme.colors.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, marginLeft: 4 }}>
+                        Billing & Payment
+                      </Text>
+                      <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: theme.colors.card }}>
 
-                              {paymentConfig.upiId && (
-                                <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2, textAlign: "center" }}>
-                                  UPI ID: {paymentConfig.upiId}
-                                </Text>
-                              )}
-                            </>
-                          )}
-
-                          {paymentConfig && paymentConfig.upiId && (
-                            <View style={{ width: "100%", marginTop: 16, borderTopWidth: 1, borderColor: theme.colors.borderLight, paddingTop: 14 }}>
-                              <Text style={[styles.formLabel, { color: theme.colors.text, marginBottom: 8, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
-                                UPI Transaction ID (8-35 Characters)<Text style={{ color: theme.colors.danger }}> *</Text>
-                              </Text>
-                              <AppInput
-                                placeholder="Enter 12-digit transaction ID"
-                                value={transactionId}
-                                onChangeText={(val) => {
-                                  setTransactionId(val);
-                                  setTransactionIdError("");
-                                }}
-                                error={transactionIdError}
-                              />
-                            </View>
+                        {/* Service Charge Input */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 0 }}>
+                          <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                            Service Charge ({currencySymbol})
+                          </Text>
+                          {!job?.isAmcCovered ? (
+                            <Text style={{ fontSize: 11, color: theme.colors.primary, fontWeight: "600" }}>
+                              Editable
+                            </Text>
+                          ) : (
+                            <Text style={{ fontSize: 11, color: theme.colors.success, fontWeight: "600" }}>
+                              Covered by AMC (₹0)
+                            </Text>
                           )}
                         </View>
-                      )}
-
-                      <Pressable
-                        onPress={() => setPaymentConfirmed(!paymentConfirmed)}
-                        style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 14, paddingHorizontal: 4 }}
-                      >
                         <View
                           style={{
-                            width: 22,
-                            height: 22,
-                            borderRadius: 6,
-                            borderWidth: 2,
-                            borderColor: paymentConfirmed ? theme.colors.success : theme.colors.border,
-                            backgroundColor: paymentConfirmed ? theme.colors.success : theme.colors.card,
-                            justifyContent: "center",
+                            flexDirection: "row",
                             alignItems: "center",
+                            backgroundColor: job?.isAmcCovered ? "#f8fafc" : theme.colors.card,
+                            borderWidth: 1.5,
+                            borderColor: job?.isAmcCovered ? theme.colors.borderLight : theme.colors.primary,
+                            borderRadius: 10,
+                            paddingHorizontal: 12,
+                            height: 46,
+                            gap: 8,
+                            marginTop: 4
                           }}
                         >
-                          {paymentConfirmed && (
-                            <CheckCircle size={14} color="#ffffff" />
+                          <Text style={{ fontSize: 15, fontWeight: "700", color: job?.isAmcCovered ? theme.colors.textMuted : theme.colors.primary }}>{currencySymbol}</Text>
+                          <TextInput
+                            value={amountStr}
+                            onChangeText={(text) => {
+                              const clean = text.replace(/[^0-9.]/g, "");
+                              const parts = clean.split(".");
+                              const sanitized = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : clean;
+                              setAmountStr(sanitized);
+                            }}
+                            editable={!job?.isAmcCovered}
+                            keyboardType="decimal-pad"
+                            placeholder="0.00"
+                            placeholderTextColor={theme.colors.textMuted}
+                            style={{
+                              flex: 1,
+                              fontSize: 15,
+                              fontWeight: "700",
+                              color: job?.isAmcCovered ? theme.colors.textMuted : theme.colors.text
+                            }}
+                          />
+                        </View>
+
+                        {/* Labour Charge Input (Read-only, fetched from backend) */}
+                        {labour > 0 && (
+                          <>
+                            <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 16, fontSize: 13, fontWeight: "600" }]}>Labour Charge ({currencySymbol})</Text>
+                            <View
+                              style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                backgroundColor: "#f8fafc",
+                                borderWidth: 1.5,
+                                borderColor: theme.colors.borderLight,
+                                borderRadius: 10,
+                                paddingHorizontal: 12,
+                                height: 46,
+                                gap: 8,
+                                marginTop: 4
+                              }}
+                            >
+                              <Text style={{ fontSize: 15, fontWeight: "600", color: theme.colors.textMuted }}>{currencySymbol}</Text>
+                              <TextInput
+                                value={labourChargeStr}
+                                editable={false}
+                                placeholder="0.00"
+                                style={{ flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textMuted }}
+                              />
+                            </View>
+                          </>
+                        )}
+
+                        {/* Read-Only Spare Parts Summary */}
+                        {completionSpareParts.length > 0 && (
+                          <View style={{ marginTop: 16, marginBottom: 4 }}>
+                            <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, marginBottom: 8, fontSize: 13, fontWeight: "600" }]}>
+                              Spare Parts Summary
+                            </Text>
+                            {completionSpareParts.map((item, idx) => (
+                              <View
+                                key={idx}
+                                style={{
+                                  flexDirection: "row",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  paddingVertical: 8,
+                                  borderBottomWidth: idx < completionSpareParts.length - 1 ? 1 : 0,
+                                  borderColor: theme.colors.borderLight
+                                }}
+                              >
+                                <View style={{ flex: 1 }}>
+                                  <Text style={{ fontSize: 13, fontWeight: "600", color: theme.colors.text }}>{item.partName}</Text>
+                                  <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>Qty: {item.quantity} × {currencySymbol}{item.unitPrice}</Text>
+                                </View>
+                                <AppBadge
+                                  label={item.warrantyStatus === "WARRANTY" ? "Under Warranty (₹0)" : "Billable"}
+                                  variant={item.warrantyStatus === "WARRANTY" ? "success" : "secondary"}
+                                />
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        {/* Additional Charges Section */}
+                        <View style={{ marginTop: 16 }}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                            <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>Additional Charges</Text>
+                            <Pressable
+                              onPress={() => setExtraCharges([...extraCharges, { id: Date.now().toString(), name: "", amountStr: "" }])}
+                              style={{ paddingVertical: 4, paddingHorizontal: 8, backgroundColor: `${theme.colors.primary}10`, borderRadius: 6 }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: "700", color: theme.colors.primary }}>+ Add Charge</Text>
+                            </Pressable>
+                          </View>
+
+                          {extraCharges.map((item, idx) => (
+                            <View key={item.id} style={{ flexDirection: "row", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                              <TextInput
+                                placeholder="Description (e.g. Travel, Cable)"
+                                placeholderTextColor={theme.colors.textMuted}
+                                value={item.name}
+                                onChangeText={(val) => {
+                                  const updated = [...extraCharges];
+                                  updated[idx].name = val;
+                                  setExtraCharges(updated);
+                                }}
+                                style={{
+                                  flex: 2,
+                                  height: 40,
+                                  backgroundColor: theme.colors.background,
+                                  borderWidth: 1,
+                                  borderColor: theme.colors.borderLight,
+                                  borderRadius: 8,
+                                  paddingHorizontal: 10,
+                                  fontSize: 13,
+                                  color: theme.colors.text
+                                }}
+                              />
+                              <View style={{ flex: 1, flexDirection: "row", alignItems: "center", backgroundColor: theme.colors.background, borderWidth: 1, borderColor: theme.colors.borderLight, borderRadius: 8, height: 40, paddingHorizontal: 8, gap: 4 }}>
+                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>{currencySymbol}</Text>
+                                <TextInput
+                                  placeholder="0.00"
+                                  placeholderTextColor={theme.colors.textMuted}
+                                  keyboardType="decimal-pad"
+                                  value={item.amountStr}
+                                  onChangeText={(val) => {
+                                    const clean = val.replace(/[^0-9.]/g, "");
+                                    const updated = [...extraCharges];
+                                    updated[idx].amountStr = clean;
+                                    setExtraCharges(updated);
+                                  }}
+                                  style={{ flex: 1, fontSize: 13, color: theme.colors.text, fontWeight: "600" }}
+                                />
+                              </View>
+                              <Pressable
+                                onPress={() => setExtraCharges(extraCharges.filter((_, i) => i !== idx))}
+                                style={{ padding: 6 }}
+                              >
+                                <Trash2 size={16} color={theme.colors.danger} />
+                              </Pressable>
+                            </View>
+                          ))}
+                        </View>
+
+                        {/* Real-time Payment Preview Breakdown */}
+                        {paymentPreview && (
+                          <View style={{ marginTop: 16, backgroundColor: `${theme.colors.primary}06`, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: `${theme.colors.primary}20` }}>
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                              <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Service Charge</Text>
+                              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                {currencySymbol}{paymentPreview.serviceCharge.toLocaleString("en-IN")}
+                              </Text>
+                            </View>
+
+                            {paymentPreview.labourCharge > 0 && (
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Labour Charge</Text>
+                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                  {currencySymbol}{paymentPreview.labourCharge.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            )}
+
+                            {paymentPreview.sparePartsAmount > 0 && (
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Spare Parts (Chargeable)</Text>
+                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                  {currencySymbol}{paymentPreview.sparePartsAmount.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            )}
+
+                            {paymentPreview.additionalCharge > 0 && (
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Additional Charges</Text>
+                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                  {currencySymbol}{paymentPreview.additionalCharge.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            )}
+
+                            {paymentPreview.discount > 0 && (
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                <Text style={{ fontSize: 12, color: theme.colors.success }}>Discount</Text>
+                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.success }}>
+                                  -{currencySymbol}{paymentPreview.discount.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            )}
+
+                            <View style={{ height: 1, backgroundColor: theme.colors.borderLight, marginVertical: 6 }} />
+
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>Subtotal</Text>
+                              <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.text }}>
+                                {currencySymbol}{paymentPreview.subtotal.toLocaleString("en-IN")}
+                              </Text>
+                            </View>
+
+                            {paymentPreview.gstAmount > 0 && (
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>GST ({paymentPreview.gstPercent}%)</Text>
+                                <Text style={{ fontSize: 11, fontWeight: "600", color: theme.colors.text }}>
+                                  +{currencySymbol}{paymentPreview.gstAmount.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            )}
+
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderColor: `${theme.colors.primary}30` }}>
+                              <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.primary }}>Grand Total</Text>
+                              <Text style={{ fontSize: 16, fontWeight: "900", color: theme.colors.primary }}>
+                                {currencySymbol}{paymentPreview.grandTotal.toLocaleString("en-IN")}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+
+                        {/* Mode cash/upi */}
+                        <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>
+                        <View style={{ flexDirection: "row", gap: 12, marginBottom: 12 }}>
+                          <Pressable
+                            onPress={() => setPaymentMode("CASH")}
+                            style={{
+                              flex: 1,
+                              height: 48,
+                              borderRadius: 8,
+                              borderWidth: 2,
+                              borderColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.borderLight,
+                              justifyContent: "center",
+                              alignItems: "center",
+                              backgroundColor: paymentMode === "CASH" ? theme.colors.primary : theme.colors.card,
+                            }}
+                          >
+                            <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "CASH" ? "#ffffff" : theme.colors.textMuted }}>CASH</Text>
+                          </Pressable>
+                          {paymentConfig?.upiEnabled && (
+                            <Pressable
+                              onPress={() => setPaymentMode("UPI")}
+                              style={{
+                                flex: 1,
+                                height: 48,
+                                borderRadius: 8,
+                                borderWidth: 2,
+                                borderColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.borderLight,
+                                justifyContent: "center",
+                                alignItems: "center",
+                                backgroundColor: paymentMode === "UPI" ? theme.colors.primary : theme.colors.card,
+                              }}
+                            >
+                              <Text style={{ fontWeight: "800", fontSize: 14, color: paymentMode === "UPI" ? "#ffffff" : theme.colors.textMuted }}>UPI</Text>
+                            </Pressable>
                           )}
                         </View>
-                        <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600", flex: 1 }}>
-                          Confirm payment of {currencySymbol}{(paymentPreview ? paymentPreview.grandTotal : amount).toLocaleString("en-IN")} has been received.
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                )}
 
+                        {paymentMode === "UPI" && (
+                          <View style={{ alignItems: "center", marginVertical: 14, padding: 16, backgroundColor: "#ffffff", borderRadius: 12, borderWidth: 1.5, borderColor: theme.colors.borderLight }}>
+                            {(!paymentConfig || !paymentConfig.upiEnabled) ? (
+                              <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                                UPI payment is disabled.
+                              </Text>
+                            ) : !paymentConfig.upiId ? (
+                              <Text style={{ fontSize: 13, color: theme.colors.danger, fontWeight: "600", textAlign: "center", marginVertical: 20 }}>
+                                UPI not available.
+                              </Text>
+                            ) : (
+                              <>
+                                <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
+                                  <QRCode
+                                    value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${paymentPreview ? paymentPreview.grandTotal : amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
+                                    size={130}
+                                  />
+                                </View>
+
+                                <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "600", textAlign: "center", paddingHorizontal: 10 }}>
+                                  Scan to Pay {currencySymbol}{(paymentPreview ? paymentPreview.grandTotal : amount).toLocaleString("en-IN")}
+                                </Text>
+
+                                {paymentConfig.upiAccountName && (
+                                  <Text style={{ fontSize: 11, color: theme.colors.text, marginTop: 4, fontWeight: "500", textAlign: "center" }}>
+                                    Merchant: {paymentConfig.upiAccountName}
+                                  </Text>
+                                )}
+
+                                {paymentConfig.upiId && (
+                                  <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginTop: 2, textAlign: "center" }}>
+                                    UPI ID: {paymentConfig.upiId}
+                                  </Text>
+                                )}
+                              </>
+                            )}
+
+                            {paymentConfig && paymentConfig.upiId && (
+                              <View style={{ width: "100%", marginTop: 16, borderTopWidth: 1, borderColor: theme.colors.borderLight, paddingTop: 14 }}>
+                                <Text style={[styles.formLabel, { color: theme.colors.text, marginBottom: 8, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                                  UPI Transaction ID (8-35 Characters)<Text style={{ color: theme.colors.danger }}> *</Text>
+                                </Text>
+                                <AppInput
+                                  placeholder="Enter 12-digit transaction ID"
+                                  value={transactionId}
+                                  onChangeText={(val) => {
+                                    setTransactionId(val);
+                                    setTransactionIdError("");
+                                  }}
+                                  error={transactionIdError}
+                                />
+                              </View>
+                            )}
+                          </View>
+                        )}
+
+                        <Pressable
+                          onPress={() => setPaymentConfirmed(!paymentConfirmed)}
+                          style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 14, paddingHorizontal: 4 }}
+                        >
+                          <View
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: 6,
+                              borderWidth: 2,
+                              borderColor: paymentConfirmed ? theme.colors.success : theme.colors.border,
+                              backgroundColor: paymentConfirmed ? theme.colors.success : theme.colors.card,
+                              justifyContent: "center",
+                              alignItems: "center",
+                            }}
+                          >
+                            {paymentConfirmed && (
+                              <CheckCircle size={14} color="#ffffff" />
+                            )}
+                          </View>
+                          <Text style={{ fontSize: 13, color: theme.colors.text, fontWeight: "600", flex: 1 }}>
+                            Confirm payment of {currencySymbol}{(paymentPreview ? paymentPreview.grandTotal : amount).toLocaleString("en-IN")} has been received.
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  )
+                )}
                 {/* Bottom Buttons */}
-                <View style={[styles.btnRow, { marginTop: 8 }]}>
-                  {completeStep !== 2 && (
-                    <AppButton title="Cancel" variant="outline" onPress={() => setCompleteFormVisible(false)} style={{ flex: 1 }} />
+                <View style={[styles.btnRow, { marginTop: 8, gap: 10 }]}>
+                  {completeStep === 2 ? (
+                    <>
+                      {isPendingCredit ? (
+                        <>
+                          <AppButton
+                            title="Cancel"
+                            variant="outline"
+                            onPress={() => setCompleteFormVisible(false)}
+                            style={{ flex: 1 }}
+                          />
+                          <AppButton
+                            title="Collect Payment"
+                            variant="success"
+                            onPress={handlePaymentSubmit}
+                            loading={submitting}
+                            disabled={submitting || !paymentConfirmed}
+                            style={{ flex: 1.5 }}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <AppButton
+                            title="Credit / Pay Later"
+                            variant="outline"
+                            onPress={handleCreditPayLaterPress}
+                            disabled={submitting}
+                            loading={isCreditSubmitting}
+                            style={{ flex: 1, borderColor: theme.colors.warning }}
+                            textStyle={{ color: theme.colors.warning }}
+                          />
+                          <AppButton
+                            title="Collect Payment"
+                            variant="success"
+                            onPress={handlePaymentSubmit}
+                            loading={submitting}
+                            style={{ flex: 1.3 }}
+                          />
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <AppButton
+                        title="Cancel"
+                        variant="outline"
+                        onPress={() => setCompleteFormVisible(false)}
+                        style={{ flex: 1 }}
+                      />
+                      <AppButton
+                        title="Complete Job"
+                        variant="success"
+                        onPress={handleCompleteSubmit}
+                        loading={submitting}
+                        style={{ flex: 1.8 }}
+                      />
+                    </>
                   )}
-                  <AppButton
-                    title={completeStep === 2 ? "Collect Payment" : "Complete Job"}
-                    variant="success"
-                    onPress={completeStep === 2 ? handlePaymentSubmit : handleCompleteSubmit}
-                    loading={submitting}
-                    style={{ flex: completeStep === 2 ? 1 : 1.8 }}
-                  />
                 </View>
+
               </ScrollView>
             </AppCard>
           </KeyboardAvoidingView>

@@ -31,11 +31,15 @@ export class PaymentService {
    * GET /web/settings/charges
    * Fetches platform charge settings.
    */
-  static async getPlatformCharges(): Promise<PlatformCharges> {
-    const res = await apiClient.get<any>("/web/settings/charges");
-    // The response structure is { success: true, data: { ... } }
-    return res.data?.data;
+  static async getPlatformCharges(): Promise<PlatformCharges | null> {
+    try {
+      const res = await apiClient.get<any>("/web/settings/charges");
+      return res.data?.data || null;
+    } catch {
+      return null;
+    }
   }
+
 
   /**
    * GET /mobile/payment-config

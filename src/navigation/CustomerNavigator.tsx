@@ -19,6 +19,7 @@ import { AmcDetailsScreen } from "../screens/customer/AmcDetailsScreen";
 
 import { CustomerHomeScreen } from "../screens/customer/CustomerHomeScreen";
 import { CustomerJobDetailsScreen } from "../screens/customer/CustomerJobDetailsScreen";
+import { CustomerCreditScreen } from "../screens/customer/CustomerCreditScreen";
 import { PostLoginSplashScreen } from "../screens/auth/PostLoginSplashScreen";
 
 const Stack = createNativeStackNavigator<CustomerStackParamList>();
@@ -40,6 +41,7 @@ export const CustomerNavigator = () => {
       <Stack.Screen name="PaymentHistory" component={PaymentHistoryScreen} />
       <Stack.Screen name="InvoiceList" component={InvoiceListScreen} />
       <Stack.Screen name="InvoiceDetails" component={InvoiceDetailsScreen} />
+      <Stack.Screen name="CustomerCredit" component={CustomerCreditScreen} />
       <Stack.Screen name="Feedback" component={FeedbackScreen} />
       <Stack.Screen name="AddressBook" component={AddressBookScreen} />
       <Stack.Screen name="CustomerAssets" component={CustomerAssetsScreen} />

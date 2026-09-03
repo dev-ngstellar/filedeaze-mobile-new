@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
+
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   View,
@@ -131,6 +132,23 @@ export const CustomerHomeScreen = () => {
   useEffect(() => {
     setBookingMode(hasActiveAmc ? "AMC" : "NORMAL");
   }, [hasActiveAmc]);
+
+  const outstandingCreditSummary = useMemo(() => {
+    let count = 0;
+    let total = 0;
+
+    (payments || []).forEach((p: any) => {
+      if (p.method === "CREDIT" && p.status === "PENDING") {
+        count++;
+        const amt = p.invoice?.total != null ? Number(p.invoice.total) : Number(p.amount || 0);
+        total += amt;
+      }
+    });
+
+    return { count, total };
+  }, [payments]);
+
+
 
   // Form states
   const [name, setName] = useState("");
@@ -306,9 +324,10 @@ export const CustomerHomeScreen = () => {
   };
 
   const getPaymentStatusVariant = (status: string) => {
-    const s = status.toUpperCase();
-    if (s === "PAID" || s === "COMPLETED" || s === "SUCCESS") return "success";
+    const s = (status || "").toUpperCase();
+    if (s === "PAID" || s === "COMPLETED" || s === "SUCCESS" || s === "COLLECTED" || s === "VERIFIED") return "success";
     if (s === "PENDING" || s === "PROCESSING") return "warning";
+    if (s === "REFUNDED") return "info" as any;
     return "danger";
   };
 
@@ -736,6 +755,46 @@ export const CustomerHomeScreen = () => {
                 )}
               </View>
 
+              {/* Outstanding Credit / Pay Later Card */}
+              {outstandingCreditSummary.count > 0 && (
+                <Pressable
+                  onPress={() => navigation.navigate("CustomerCredit")}
+                  style={({ pressed }) => [
+                    styles.creditHomeCard,
+                    {
+                      backgroundColor: theme.colors.card,
+                      borderColor: `${theme.colors.warning}35`,
+                      marginHorizontal: theme.spacing.md,
+                    },
+                    pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] },
+                  ]}
+                >
+                  <View style={[styles.creditCardIconWrap, { backgroundColor: `${theme.colors.warning}15` }]}>
+                    <CreditCard size={20} color={theme.colors.warning} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <Text style={[styles.creditCardTitle, { color: theme.colors.text }]}>
+                        Outstanding Payment
+                      </Text>
+                      <View style={[styles.creditCountBadge, { backgroundColor: `${theme.colors.warning}18` }]}>
+                        <Text style={[styles.creditCountBadgeText, { color: theme.colors.warning }]}>
+                          {outstandingCreditSummary.count} Pending
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.creditCardAmount, { color: theme.colors.warning }]}>
+                      ₹{outstandingCreditSummary.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                      <Text style={[styles.creditCardAmountSub, { color: theme.colors.textMuted }]}> outstanding</Text>
+                    </Text>
+                  </View>
+                  <View style={styles.creditCardRight}>
+                    <Text style={[styles.creditCardViewText, { color: theme.colors.warning }]}>View</Text>
+                    <ChevronRight size={15} color={theme.colors.warning} />
+                  </View>
+                </Pressable>
+              )}
+
               {/* Recent Booking Strip */}
               {tickets.length > 0 && (
                 <View style={styles.recentSection}>
@@ -749,6 +808,7 @@ export const CustomerHomeScreen = () => {
                     onPress={() => navigation.navigate("CustomerJobDetails", { jobId: tickets[0].id })}
                     style={styles.recentCard}
                   >
+
                     <View style={styles.cardHeader}>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                         <ClipboardList size={15} color={theme.colors.textMuted} />
@@ -998,7 +1058,55 @@ export const CustomerHomeScreen = () => {
 
           {activeTab === "PAYMENTS" && (
             <View style={{ paddingTop: 16 }}>
+              {outstandingCreditSummary.count > 0 && (
+                <Pressable
+                  onPress={() => navigation.navigate("CustomerCredit")}
+                  style={({ pressed }) => [
+                    styles.creditHomeCard,
+                    {
+                      backgroundColor: theme.colors.card,
+                      borderColor: `${theme.colors.warning}35`,
+                      marginHorizontal: theme.spacing.md,
+                      marginBottom: 16,
+                    },
+                    pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] },
+                  ]}
+                >
+                  <View style={[styles.creditCardIconWrap, { backgroundColor: `${theme.colors.warning}15` }]}>
+                    <CreditCard size={20} color={theme.colors.warning} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <Text style={[styles.creditCardTitle, { color: theme.colors.text }]}>
+                        Outstanding Payment
+                      </Text>
+                      <View style={[styles.creditCountBadge, { backgroundColor: `${theme.colors.warning}18` }]}>
+                        <Text style={[styles.creditCountBadgeText, { color: theme.colors.warning }]}>
+                          {outstandingCreditSummary.count} Pending
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.creditCardAmount, { color: theme.colors.warning }]}>
+                      ₹{outstandingCreditSummary.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                      <Text style={[styles.creditCardAmountSub, { color: theme.colors.textMuted }]}> outstanding</Text>
+                    </Text>
+                  </View>
+                  <View style={styles.creditCardRight}>
+                    <Text style={[styles.creditCardViewText, { color: theme.colors.warning }]}>View</Text>
+                    <ChevronRight size={15} color={theme.colors.warning} />
+                  </View>
+                </Pressable>
+              )}
+
+              <View style={[styles.tabHeader, { paddingHorizontal: theme.spacing.md, marginBottom: 8 }]}>
+                <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>
+                  Transaction History
+                </Text>
+              </View>
+
               {isPaymentsLoading ? (
+
+
                 <AppLoader message="Retrieving transactions..." />
               ) : payments.length === 0 ? (
                 <AppEmptyState
@@ -1006,72 +1114,86 @@ export const CustomerHomeScreen = () => {
                   description="Your service payment records will be documented here once transaction processes."
                 />
               ) : (
-                payments.map((item) => (
-                  <AppCard
-                    key={item.id}
-                    style={styles.ticketCard}
-                    onPress={() => {
-                      if (item.invoice?.invoiceNumber) {
-                        const matchingInvoice = invoices.find(
-                          (inv) =>
-                            inv.invoiceNumber === item.invoice?.invoiceNumber,
-                        );
-                        navigation.navigate("InvoiceDetails", {
-                          invoiceId: matchingInvoice?.id || item.id,
-                        });
-                      }
-                    }}
-                  >
-                    <View style={styles.cardHeader}>
-                      <View
-                        style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
-                      >
-                        <Text
-                          style={[
-                            styles.label,
-                            { color: theme.colors.textMuted },
-                          ]}
+                payments.map((item) => {
+                  const matchingInvoice = invoices.find(
+                    (inv) => inv.invoiceNumber === item.invoice?.invoiceNumber,
+                  );
+                  const actualAmount = Number(
+                    item.invoice?.total != null
+                      ? item.invoice.total
+                      : matchingInvoice?.total != null
+                      ? matchingInvoice.total
+                      : item.amount ?? 0
+                  );
+                  const formattedAmount = actualAmount.toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  });
+                  const targetInvoiceId = matchingInvoice?.id || item.invoice?.id || item.id;
+                  const displayStatus = item.status === "COLLECTED" ? "PAID" : item.status;
+
+                  return (
+                    <AppCard
+                      key={item.id}
+                      style={styles.ticketCard}
+                      onPress={() => {
+                        if (targetInvoiceId) {
+                          navigation.navigate("InvoiceDetails", {
+                            invoiceId: targetInvoiceId,
+                          });
+                        }
+                      }}
+                    >
+                      <View style={styles.cardHeader}>
+                        <View
+                          style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
                         >
-                          Payment ID
+                          <Text
+                            style={[
+                              styles.label,
+                              { color: theme.colors.textMuted },
+                            ]}
+                          >
+                            Payment ID
+                          </Text>
+                          <Text
+                            style={[styles.valueId, { color: theme.colors.text }]}
+                          >
+                            {item.id.substring(0, 8).toUpperCase()}
+                          </Text>
+                        </View>
+                        <AppBadge
+                          label={displayStatus}
+                          variant={getPaymentStatusVariant(item.status)}
+                        />
+                      </View>
+
+                      <View style={styles.detailRow}>
+                        <Text
+                          style={[styles.label, { color: theme.colors.textMuted }]}
+                        >
+                          Invoice No.
                         </Text>
-                        <Text
-                          style={[styles.valueId, { color: theme.colors.text }]}
-                        >
-                          {item.id.substring(0, 8).toUpperCase()}
+                        <Text style={[styles.value, { color: theme.colors.text }]}>
+                          {item.invoice?.invoiceNumber || "—"}
                         </Text>
                       </View>
-                      <AppBadge
-                        label={item.status}
-                        variant={getPaymentStatusVariant(item.status)}
-                      />
-                    </View>
 
-                    <View style={styles.detailRow}>
-                      <Text
-                        style={[styles.label, { color: theme.colors.textMuted }]}
-                      >
-                        Invoice No.
-                      </Text>
-                      <Text style={[styles.value, { color: theme.colors.text }]}>
-                        {item.invoice?.invoiceNumber || "—"}
-                      </Text>
-                    </View>
-
-                    <View style={styles.detailRow}>
-                      <Text
-                        style={[styles.label, { color: theme.colors.textMuted }]}
-                      >
-                        Amount
-                      </Text>
-                      <Text
-                        style={[
-                          styles.valueAmount,
-                          { color: theme.colors.primary },
-                        ]}
-                      >
-                        ₹{item.amount}
-                      </Text>
-                    </View>
+                      <View style={styles.detailRow}>
+                        <Text
+                          style={[styles.label, { color: theme.colors.textMuted }]}
+                        >
+                          Amount
+                        </Text>
+                        <Text
+                          style={[
+                            styles.valueAmount,
+                            { color: theme.colors.primary },
+                          ]}
+                        >
+                          ₹{formattedAmount}
+                        </Text>
+                      </View>
 
                     <View
                       style={[
@@ -1119,8 +1241,9 @@ export const CustomerHomeScreen = () => {
                       ) : null}
                     </View>
                   </AppCard>
-                ))
-              )}
+                );
+              })
+            )}
             </View>
           )}
 
@@ -1340,6 +1463,13 @@ export const CustomerHomeScreen = () => {
           <Pressable style={styles.navItem} onPress={() => setActiveTab("PAYMENTS")}>
             <View style={[styles.navIconWrap, activeTab === "PAYMENTS" && { backgroundColor: `${theme.colors.primary}18` }]}>
               <CreditCard size={tabIconSize} color={activeTab === "PAYMENTS" ? theme.colors.primary : theme.colors.textMuted} />
+              {outstandingCreditSummary.count > 0 && (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>
+                    {outstandingCreditSummary.count > 99 ? "99+" : outstandingCreditSummary.count}
+                  </Text>
+                </View>
+              )}
             </View>
             <Text style={[styles.navLabel, { fontSize: tabLabelSize, color: activeTab === "PAYMENTS" ? theme.colors.primary : theme.colors.textMuted, fontWeight: activeTab === "PAYMENTS" ? "700" : "500" }]}>Payments</Text>
           </Pressable>
@@ -1971,6 +2101,121 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 12,
   },
+  tabBadge: {
+    position: "absolute",
+    top: -3,
+    right: -6,
+    backgroundColor: "#EF4444",
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: "#ffffff",
+    zIndex: 10,
+  },
+  tabBadgeText: {
+    color: "#ffffff",
+    fontSize: 9,
+    fontWeight: "800",
+    textAlign: "center",
+    includeFontPadding: false,
+  },
+  creditHomeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    marginBottom: 16,
+    gap: 12,
+    shadowColor: "rgba(15,23,42,0.06)",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  creditCardIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creditCardTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  creditCountBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  creditCountBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  creditCardAmount: {
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  creditCardAmountSub: {
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  creditCardRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingLeft: 4,
+  },
+  creditCardViewText: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  creditHomeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    marginBottom: 16,
+    gap: 12,
+  },
+  creditBannerIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creditBannerTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  creditBannerSubtext: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  creditPaymentsCard: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1.5,
+  },
+  viewCreditBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 4,
+  },
 });
+
+
 
 export default CustomerHomeScreen;

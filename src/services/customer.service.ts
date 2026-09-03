@@ -158,24 +158,38 @@ export interface CustomerTicketDetail {
 
 export interface CustomerPayment {
   id: string;
+  tenantId?: string;
+  ticketId?: string;
   createdAt: string;
-  amount: number;
+  updatedAt?: string;
+  amount: number | string;
+  serviceCharge?: number | string;
+  labourCharge?: number | string;
+  sparePartsAmount?: number | string;
+  additionalCharge?: number | string;
+  discount?: number | string;
   method: string;
   status: string;
-  ticket: {
+  collectedAt?: string | null;
+  confirmedBy?: string | null;
+  ticket?: {
+    id?: string;
+    ticketNumber?: string;
     description: string;
-    subCategory: {
+    subCategory?: {
       name: string;
-      category: {
+      category?: {
         name: string;
       };
     };
-  };
-  invoice: {
+  } | null;
+  invoice?: {
+    id?: string;
     invoiceNumber: string;
-    total: number;
-  };
+    total: number | string;
+  } | null;
 }
+
 
 export interface CustomerFeedback {
   id: string;

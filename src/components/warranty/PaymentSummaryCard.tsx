@@ -151,13 +151,32 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
           {paymentMode ? (
             <View style={styles.row}>
               <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>Payment Mode</Text>
-              <Text style={[styles.metaValue, { color: theme.colors.text }]}>{paymentMode}</Text>
+              <Text style={[styles.metaValue, { color: theme.colors.text }]}>
+                {paymentMode === "CREDIT" ? "Credit / Pay Later" : paymentMode}
+              </Text>
             </View>
           ) : null}
           {paymentStatus ? (
             <View style={styles.row}>
               <Text style={[styles.metaLabel, { color: theme.colors.textMuted }]}>Payment Status</Text>
-              <Text style={[styles.metaValue, { color: theme.colors.success }]}>{paymentStatus}</Text>
+              <Text
+                style={[
+                  styles.metaValue,
+                  {
+                    color:
+                      paymentStatus.toUpperCase() === "PENDING"
+                        ? theme.colors.warning
+                        : theme.colors.success,
+                    fontWeight: "700",
+                  },
+                ]}
+              >
+                {paymentStatus.toUpperCase() === "PENDING"
+                  ? "Payment Pending"
+                  : paymentStatus.toUpperCase() === "COLLECTED"
+                  ? "Payment Collected"
+                  : paymentStatus}
+              </Text>
             </View>
           ) : null}
           {invoiceDate ? (

@@ -172,9 +172,11 @@ export const TechnicianHomeScreen = () => {
       (!j.scheduledDateRaw || j.scheduledDateRaw <= todayStr)
   );
 
-  // 2. Payment pending: invoice generated
+  // 2. Payment pending: jobs completed or invoice generated where payment is not yet collected
   const paymentPending = jobsList.filter(
-    (j) => (j.status as string) === "INVOICE_GENERATED"
+    (j) =>
+      ((j.status as string) === "COMPLETED" || (j.status as string) === "INVOICE_GENERATED") &&
+      j.paymentStatus !== "COLLECTED"
   );
 
   // 3. Completed/Closed
@@ -218,12 +220,8 @@ export const TechnicianHomeScreen = () => {
   const completionRate = jobsList.length > 0 ? Math.round((completedCount / jobsList.length) * 100) : 0;
 
   const handleCheckInPress = () => {
-    if (attendance?.shiftCompleted) {
-      Alert.alert("Shift Completed", "Your shift for today has already been completed.");
-      return;
-    }
     if (attendance?.checkedIn) {
-      Alert.alert("Already Checked In", "You are already checked in today.");
+      Alert.alert("Already Checked In", "You already have an active check-in session.");
       return;
     }
     setLocationModalVisible(true);
@@ -233,8 +231,8 @@ export const TechnicianHomeScreen = () => {
 
   const handleCheckInSubmit = async () => {
     if (isSubmittingAttendance || checkInMutation.isPending) return;
-    if (attendance?.shiftCompleted) {
-      Alert.alert("Shift Completed", "Your shift for today has already been completed.");
+    if (attendance?.checkedIn) {
+      Alert.alert("Already Checked In", "You already have an active check-in session.");
       return;
     }
     setIsSubmittingAttendance(true);
@@ -274,7 +272,8 @@ export const TechnicianHomeScreen = () => {
       setSuccessMessage("Attendance checked in successfully.");
       setSuccessModalVisible(true);
     } catch (err: any) {
-      Alert.alert("Check-In Failed", "We couldn't record your check-in. Please check your location settings and try again.");
+      const msg = err?.response?.data?.message || err?.message || "We couldn't record your check-in. Please check your location settings and try again.";
+      Alert.alert("Check-In Failed", Array.isArray(msg) ? msg.join("\n") : msg);
     } finally {
       setIsSubmittingAttendance(false);
     }
@@ -430,19 +429,19 @@ export const TechnicianHomeScreen = () => {
               style={[
                 styles.heroStatusDot,
                 {
-                  backgroundColor: attendance?.shiftCompleted
-                    ? "#facc15"
-                    : attendance?.checkedIn
+                  backgroundColor: attendance?.checkedIn
                     ? "#4ade80"
+                    : attendance?.checkOutTime
+                    ? "#facc15"
                     : "rgba(255,255,255,0.4)",
                 },
               ]}
             />
             <Text style={styles.heroStatusText}>
-              {attendance?.shiftCompleted
-                ? "Shift Completed Today"
-                : attendance?.checkedIn
+              {attendance?.checkedIn
                 ? `Active · Since ${attendance.checkInTime}`
+                : attendance?.checkOutTime
+                ? "Checked Out · Ready to Check In"
                 : "Not Checked In"}
             </Text>
           </View>
@@ -482,43 +481,16 @@ export const TechnicianHomeScreen = () => {
             >
               ATTENDANCE TRACKING
             </Text>
-            {attendance?.shiftCompleted ? (
-              <AppBadge label="Shift Completed" variant="success" />
-            ) : attendance?.checkedIn ? (
-              <AppBadge label="Active Check-in" variant="success" />
+            {attendance?.checkedIn ? (
+              <AppBadge label="Active Session" variant="success" />
+            ) : attendance?.checkOutTime ? (
+              <AppBadge label="Checked Out" variant="secondary" />
             ) : (
               <AppBadge label="Not Checked In" variant="secondary" />
             )}
           </View>
 
-          {attendance?.shiftCompleted ? (
-            <View style={styles.attendanceInfo}>
-              <View style={styles.metricsContainer}>
-                <View style={[styles.metricCard, { backgroundColor: `${theme.colors.success}08` }]}>
-                  <LogIn size={16} color={theme.colors.success} />
-                  <Text style={styles.metricLabel}>Check In</Text>
-                  <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.checkInTime}</Text>
-                </View>
-                <View style={[styles.metricCard, { backgroundColor: `${theme.colors.danger}08` }]}>
-                  <LogOut size={16} color={theme.colors.danger} />
-                  <Text style={styles.metricLabel}>Check Out</Text>
-                  <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.checkOutTime}</Text>
-                </View>
-                <View style={[styles.metricCard, { backgroundColor: `${theme.colors.primary}08` }]}>
-                  <Timer size={16} color={theme.colors.primary} />
-                  <Text style={styles.metricLabel}>Duration</Text>
-                  <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.workingHours || "0h 00m"}</Text>
-                </View>
-              </View>
-
-              <View style={[styles.successBanner, { backgroundColor: `${theme.colors.success}10`, borderColor: `${theme.colors.success}20` }]}>
-                <CheckCircle size={18} color={theme.colors.success} />
-                <Text style={[styles.successBannerText, { color: theme.colors.success }]}>
-                  Shift completed successfully today.
-                </Text>
-              </View>
-            </View>
-          ) : attendance?.checkedIn ? (
+          {attendance?.checkedIn ? (
             <View style={styles.attendanceInfo}>
               <View style={styles.activeSessionContainer}>
                 <View style={styles.sessionRow}>
@@ -550,7 +522,7 @@ export const TechnicianHomeScreen = () => {
                     <Timer size={16} color={theme.colors.warning} />
                   </View>
                   <View style={styles.sessionDetails}>
-                    <Text style={styles.sessionLabel}>Working Hours Today</Text>
+                    <Text style={styles.sessionLabel}>Working Hours (Current Session)</Text>
                     <Text style={[styles.sessionValue, { color: theme.colors.text }]}>
                       {elapsedHours}
                     </Text>
@@ -568,17 +540,22 @@ export const TechnicianHomeScreen = () => {
             </View>
           ) : (
             <View style={styles.attendanceInfo}>
-              {attendance?.workingHours ? (
+              {attendance?.checkOutTime ? (
                 <View style={styles.metricsContainer}>
+                  <View style={[styles.metricCard, { backgroundColor: `${theme.colors.success}08` }]}>
+                    <LogIn size={16} color={theme.colors.success} />
+                    <Text style={styles.metricLabel}>Last In</Text>
+                    <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.checkInTime || "—"}</Text>
+                  </View>
+                  <View style={[styles.metricCard, { backgroundColor: `${theme.colors.danger}08` }]}>
+                    <LogOut size={16} color={theme.colors.danger} />
+                    <Text style={styles.metricLabel}>Last Out</Text>
+                    <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.checkOutTime}</Text>
+                  </View>
                   <View style={[styles.metricCard, { backgroundColor: `${theme.colors.primary}08` }]}>
                     <Timer size={16} color={theme.colors.primary} />
-                    <Text style={styles.metricLabel}>Prev Hours</Text>
-                    <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.workingHours}</Text>
-                  </View>
-                  <View style={[styles.metricCard, { backgroundColor: `${theme.colors.secondary}08` }]}>
-                    <LogOut size={16} color={theme.colors.textMuted} />
-                    <Text style={styles.metricLabel}>Prev Ended</Text>
-                    <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.checkOutTime}</Text>
+                    <Text style={styles.metricLabel}>Duration</Text>
+                    <Text style={[styles.metricValue, { color: theme.colors.text }]}>{attendance.workingHours || "0h 00m"}</Text>
                   </View>
                 </View>
               ) : (
@@ -603,7 +580,7 @@ export const TechnicianHomeScreen = () => {
                 </View>
               )}
               <AppButton
-                title="Perform Check In"
+                title={attendance?.checkOutTime ? "Check In Again" : "Perform Check In"}
                 onPress={handleCheckInPress}
                 variant="primary"
                 icon={<LogIn size={16} color="#ffffff" />}
@@ -612,6 +589,7 @@ export const TechnicianHomeScreen = () => {
             </View>
           )}
         </AppCard>
+
 
         {/* Job Overview */}
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 8 }}>

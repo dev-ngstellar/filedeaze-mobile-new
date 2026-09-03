@@ -183,12 +183,33 @@ export interface Ticket {
   amcStatus?: TicketAmcStatus | null;
   /** Itemised spare parts used on this ticket — populated from the API response on detail views.
    * Matches the TicketSparePart shape the backend returns. */
+  customerAddress?: string;
+  customerCity?: string;
+  customerState?: string;
+  customerPincode?: string;
+  customerGstin?: string;
+  tenant?: {
+    companyName?: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    gstin?: string;
+    gstNumber?: string;
+    logoUrl?: string | null;
+    signatureUrl?: string | null;
+    authorizedSignatureUrl?: string | null;
+    termsAndConditions?: string | null;
+  };
   spareParts?: {
     id: string;
     sparePartId: string;
     name: string;
     quantity: number;
     unitPrice: number;
+    unitOfMeasure?: string;
     coverageType: "WARRANTY" | "OUT_OF_WARRANTY";
   }[];
 }
@@ -345,14 +366,35 @@ export function normalizeTicket(raw: any): Ticket {
     } : undefined,
     spareParts: Array.isArray(raw.spareParts)
       ? raw.spareParts.map((p: any) => ({
-          id: p.id ?? "",
-          sparePartId: p.sparePartId ?? "",
-          name: p.name ?? p.partName ?? "—",
-          quantity: Number(p.quantity ?? 1),
-          unitPrice: Number(p.unitPrice ?? 0),
-          coverageType: (p.coverageType ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
-        }))
+        id: p.id ?? "",
+        sparePartId: p.sparePartId ?? "",
+        name: p.name ?? p.partName ?? "—",
+        quantity: Number(p.quantity ?? 1),
+        unitPrice: Number(p.unitPrice ?? 0),
+        unitOfMeasure: p.unitOfMeasure ?? p.unit ?? "Nos",
+        coverageType: (p.coverageType ?? "OUT_OF_WARRANTY") as "WARRANTY" | "OUT_OF_WARRANTY",
+      }))
       : undefined,
+    customerAddress: raw.customer?.address ?? raw.serviceAddress ?? raw.address ?? "",
+    customerCity: raw.customer?.city ?? undefined,
+    customerState: raw.customer?.state ?? undefined,
+    customerPincode: raw.customer?.pincode ?? undefined,
+    customerGstin: raw.customer?.gstin ?? raw.customer?.gstNumber ?? undefined,
+    tenant: raw.tenant ? {
+      companyName: raw.tenant.companyName ?? raw.tenant.name,
+      email: raw.tenant.email,
+      phone: raw.tenant.phone ?? raw.tenant.mobile,
+      address: raw.tenant.address,
+      city: raw.tenant.city,
+      state: raw.tenant.state,
+      pincode: raw.tenant.pincode,
+      gstin: raw.tenant.gstin ?? raw.tenant.gstNumber,
+      gstNumber: raw.tenant.gstNumber ?? raw.tenant.gstin,
+      logoUrl: raw.tenant.logoUrl ?? raw.tenant.logo,
+      signatureUrl: raw.tenant.signatureUrl ?? raw.tenant.authorizedSignatureUrl ?? raw.tenant.signature,
+      authorizedSignatureUrl: raw.tenant.authorizedSignatureUrl ?? raw.tenant.signatureUrl ?? raw.tenant.signature,
+      termsAndConditions: raw.tenant.termsAndConditions ?? raw.tenant.terms,
+    } : undefined,
   };
 }
 
@@ -390,7 +432,7 @@ function normalizeAttendanceLog(raw: any): AttendanceLog {
   };
 }
 
-function normalizeAttendanceRecord(raw: any): any {
+export function normalizeAttendanceRecord(raw: any): any {
   console.log("=== TRACE STEP 2: normalizeAttendanceRecord START ===");
   console.log("Raw input object:", JSON.stringify(raw, null, 2));
   console.log("Extracted raw values:", {
@@ -869,16 +911,29 @@ export class JobService {
       method: string;
     }
   ): Promise<CollectPaymentResult> {
-    const methodMapped = payload.method.toUpperCase() === "CASH" ? "CASH" : "UPI_QR";
-    const backendPayload = {
-      serviceCharge: payload.serviceCharge,
-      labourCharge: payload.labourCharge,
-      additionalCharge: payload.additionalCharge,
-      discount: payload.discount,
-      warrantyParts: payload.warrantyParts?.length ? payload.warrantyParts : undefined,
-      nonWarrantyParts: payload.nonWarrantyParts?.length ? payload.nonWarrantyParts : undefined,
+    const methodUpper = String(payload.method || "CASH").toUpperCase();
+    const methodMapped = methodUpper === "CREDIT" ? "CREDIT" : "CASH";
+
+    const backendPayload: Record<string, any> = {
+      serviceCharge: Math.round(Number(payload.serviceCharge || 0) * 100) / 100,
       method: methodMapped,
     };
+
+    if (payload.labourCharge != null && !isNaN(Number(payload.labourCharge))) {
+      backendPayload.labourCharge = Math.round(Number(payload.labourCharge) * 100) / 100;
+    }
+    if (payload.additionalCharge != null && !isNaN(Number(payload.additionalCharge))) {
+      backendPayload.additionalCharge = Math.round(Number(payload.additionalCharge) * 100) / 100;
+    }
+    if (payload.discount != null && !isNaN(Number(payload.discount))) {
+      backendPayload.discount = Math.round(Number(payload.discount) * 100) / 100;
+    }
+    if (payload.warrantyParts?.length) {
+      backendPayload.warrantyParts = payload.warrantyParts;
+    }
+    if (payload.nonWarrantyParts?.length) {
+      backendPayload.nonWarrantyParts = payload.nonWarrantyParts;
+    }
 
     const res = await apiClient.post<{ data: CollectPaymentResult }>(
       `/mobile/technician/tickets/${ticketNo}/collect-payment`,
@@ -886,6 +941,43 @@ export class JobService {
     );
     return (res.data as any)?.data ?? res.data;
   }
+
+  /**
+   * Record credit / pay-later for a ticket
+   */
+  static async recordCreditPayment(
+    ticketNo: string,
+    payload: {
+      serviceCharge?: number;
+      labourCharge?: number;
+      additionalCharge?: number;
+      discount?: number;
+      notes?: string;
+    }
+  ): Promise<any> {
+    const backendPayload: Record<string, any> = {
+      serviceCharge: Math.round(Number(payload.serviceCharge || 0) * 100) / 100,
+      method: "CREDIT",
+    };
+
+    if (payload.labourCharge != null && !isNaN(Number(payload.labourCharge))) {
+      backendPayload.labourCharge = Math.round(Number(payload.labourCharge) * 100) / 100;
+    }
+    if (payload.additionalCharge != null && !isNaN(Number(payload.additionalCharge))) {
+      backendPayload.additionalCharge = Math.round(Number(payload.additionalCharge) * 100) / 100;
+    }
+    if (payload.discount != null && !isNaN(Number(payload.discount))) {
+      backendPayload.discount = Math.round(Number(payload.discount) * 100) / 100;
+    }
+
+    const res = await apiClient.post(
+      `/mobile/technician/tickets/${ticketNo}/collect-payment`,
+      backendPayload
+    );
+    return (res.data as any)?.data ?? res.data;
+  }
+
+
 
   /**
    * GET /mobile/technician/service-sub-categories/:subCategoryId/spare-parts

@@ -59,14 +59,18 @@ const TAB_FILTERS: { label: string; value: TabFilter }[] = [
 
 const ACTION_LABEL: Partial<Record<TicketStatus, string>> = {
   ASSIGNED: "View Details",
+  NEW_TICKET: "View Details",
   ACCEPTED: "Start Travelling",
   TRAVELLING: "Mark Reached",
   REACHED: "Start Job",
+  REACHED_LOCATION: "Start Job",
   IN_PROGRESS: "Complete / Pending",
+  COMPLETED: "Collect Payment",
   PENDING: "Resume Job",
   INVOICE_GENERATED: "View Invoice Details",
   CLOSED: "View Invoice Details",
 } as any;
+
 
 const getTodayStr = () => {
   const d = new Date();
@@ -244,10 +248,24 @@ export const AssignedJobsScreen = () => {
 
   // Status checks for filtering
   const filteredJobs = useMemo(() => {
-    if (activeTab === "COMPLETED") {
-      return invoiceTickets;
-    }
     const list = Array.isArray(jobs) ? jobs : [];
+    if (activeTab === "COMPLETED") {
+      const completedFromJobs = list.filter(
+        (j) => (j.status as string) === "COMPLETED" || (j.status as string) === "INVOICE_GENERATED"
+      );
+      const combined = [...completedFromJobs, ...invoiceTickets];
+      const unique = Array.from(new Map(combined.map((item) => [item.id, item])).values());
+      if (selectedDate) {
+        return unique.filter((j: any) => {
+          if (j.scheduledDateRaw === selectedDate) return true;
+          if (j.closedAt && j.closedAt.substring(0, 10) === selectedDate) return true;
+          if (j.invoiceGeneratedAt && j.invoiceGeneratedAt.substring(0, 10) === selectedDate) return true;
+          return false;
+        });
+
+      }
+      return unique;
+    }
     let tabFiltered = list;
     switch (activeTab) {
       case "ASSIGNED":
@@ -263,7 +281,7 @@ export const AssignedJobsScreen = () => {
         tabFiltered = list.filter((j) => j.status === "PENDING" || j.status === "RESCHEDULED");
         break;
       case "ALL":
-        tabFiltered = [...list, ...invoiceTickets];
+        tabFiltered = Array.from(new Map([...list, ...invoiceTickets].map((item) => [item.id, item])).values());
         break;
       default:
         tabFiltered = list;
@@ -279,6 +297,7 @@ export const AssignedJobsScreen = () => {
     }
     return tabFiltered;
   }, [jobs, activeTab, selectedDate, invoiceTickets]);
+
 
   const renderJobCard = ({ item }: { item: any }) => {
     let isLocked = false;

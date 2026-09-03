@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { JobService, TicketStatus, Ticket, SparePartCoverageType } from "../services/job.service";
+import { JobService, TicketStatus, Ticket, SparePartCoverageType, normalizeAttendanceRecord } from "../services/job.service";
 
 // ==========================================
 // QUERY KEYS
@@ -251,6 +251,38 @@ export function useRescheduleJob() {
   });
 }
 
+export function useRecordCreditPayment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      ticketNo,
+      payload,
+    }: {
+      ticketNo: string;
+      payload: {
+        serviceCharge?: number;
+        labourCharge?: number;
+        additionalCharge?: number;
+        discount?: number;
+        notes?: string;
+      };
+    }) => JobService.recordCreditPayment(ticketNo, payload),
+    onSuccess: (data: any, variables: any) => {
+      queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });
+      queryClient.invalidateQueries({ queryKey: jobQueryKeys.details(variables.ticketNo) });
+      queryClient.invalidateQueries({ queryKey: ["ticketDetails", variables.ticketNo] });
+      queryClient.invalidateQueries({ queryKey: ["technicianInvoices"] });
+      queryClient.invalidateQueries({ queryKey: ["customerPayments"] });
+      queryClient.invalidateQueries({ queryKey: ["customer", "payments"] });
+      queryClient.invalidateQueries({ queryKey: ["customerTickets"] });
+      queryClient.invalidateQueries({ queryKey: ["customerInvoices"] });
+    },
+  });
+}
+
+
+
 // ==========================================
 // ATTENDANCE HOOKS
 // ==========================================
@@ -320,7 +352,13 @@ export function useCheckOut() {
       latitude?: number;
       longitude?: number;
     } = {}) => JobService.checkOut(latitude, longitude),
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      const rawAttendance = data?.data || data;
+      const normalized = normalizeAttendanceRecord(rawAttendance);
+      queryClient.setQueryData(jobQueryKeys.attendance(), {
+        ...normalized,
+        checkedIn: false,
+      });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendance() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendanceHistory() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });

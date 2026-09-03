@@ -22,6 +22,18 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Formats a numeric value into an Indian Rupee string (e.g. ₹1,500.00).
+ */
+export function formatCurrency(amount: number | string | null | undefined): string {
+  if (amount == null || isNaN(Number(amount))) return "₹0.00";
+  return `₹${Number(amount).toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+
+/**
  * Calculates warranty status based on warranty expiration date.
  */
 export function getWarrantyStatus(warrantyExpiresAt: string | null | undefined): { label: string; badgeBg: string } {
@@ -123,5 +135,6 @@ export function getFriendlyAuthErrorMessage(err: any): string {
 }
 
 export * from "./location";
+export * from "./numberToWords";
 
 export default { toTitleCase, cleanPhoneNumber, sleep, getWarrantyStatus, getFriendlyAuthErrorMessage };

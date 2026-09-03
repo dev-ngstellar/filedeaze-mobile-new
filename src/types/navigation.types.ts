@@ -36,6 +36,7 @@ export type CustomerStackParamList = {
   CustomerAssetDetail: { assetId: string };
   MyAmc: undefined;
   AmcDetails: { subscriptionId: string };
+  CustomerCredit: undefined;
 };
 
 export type TechnicianStackParamList = {
