@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CustomerService, CustomerProfileData } from "../services/customer.service";
+import { useAuthStore } from "../store/auth.store";
 
 export const customerKeys = {
   all: ["customer"] as const,
@@ -189,10 +190,15 @@ export function useCategoryDetails(id: string) {
   });
 }
 
-export function useCustomerAssets() {
+export function useCustomerAssets(options?: { enabled?: boolean }) {
+  const { user } = useAuthStore();
+  const isCustomer = user?.role === "CUSTOMER";
+  const isEnabled = options?.enabled !== undefined ? options.enabled && isCustomer : isCustomer;
+
   return useQuery({
     queryKey: customerKeys.assets(),
     queryFn: () => CustomerService.getAssets(),
+    enabled: isEnabled,
   });
 }
 
@@ -200,8 +206,12 @@ export function useCustomerAssets() {
  * drives the bottom navigation (Assets tab vs Tickets tab) and header ticket icon. Derived from
  * the same assets query used by the Assets screen (shared cache — no duplicate network call),
  * so it recomputes automatically after login or whenever asset/AMC data is refetched. */
-export function useCustomerHasActiveAmc() {
-  const { data: assets, isLoading, isFetched } = useCustomerAssets();
+export function useCustomerHasActiveAmc(options?: { enabled?: boolean }) {
+  const { user } = useAuthStore();
+  const isCustomer = user?.role === "CUSTOMER";
+  const isEnabled = options?.enabled !== undefined ? options.enabled && isCustomer : isCustomer;
+
+  const { data: assets, isLoading, isFetched } = useCustomerAssets({ enabled: isEnabled });
   const hasActiveAmc = !!assets?.some((asset) => asset.hasActiveAmc);
   return { hasActiveAmc, isLoading, isFetched };
 }

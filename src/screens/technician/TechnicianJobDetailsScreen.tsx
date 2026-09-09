@@ -58,6 +58,7 @@ import { apiClient } from "../../api/client";
 import { TechnicianStackParamList } from "../../types/navigation.types";
 import { TicketStatus, JobService, SparePartUsageDraft, CollectPaymentResult } from "../../services/job.service";
 import { PaymentService, PlatformCharges, MobilePaymentConfig } from "../../services/payment.service";
+import { APP_CONFIG } from "../../config/app.config";
 import {
   useJobDetails,
   useUpdateJobStatus,
@@ -2689,7 +2690,7 @@ export const TechnicianJobDetailsScreen = () => {
                               <>
                                 <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
                                   <QRCode
-                                    value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${existingCreditAmount}&cu=${paymentConfig.currency || "INR"}&tn=SettleCredit`}
+                                    value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || APP_CONFIG.appName)}&am=${existingCreditAmount}&cu=${paymentConfig.currency || "INR"}&tn=SettleCredit`}
                                     size={130}
                                   />
                                 </View>
@@ -3074,7 +3075,7 @@ export const TechnicianJobDetailsScreen = () => {
                               <>
                                 <View style={{ padding: 12, borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: 16, borderStyle: "dashed", backgroundColor: "#f8fafc", marginBottom: 10 }}>
                                   <QRCode
-                                    value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || "FieldEaze Services")}&am=${paymentPreview ? paymentPreview.grandTotal : amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
+                                    value={`upi://pay?pa=${paymentConfig.upiId}&pn=${encodeURIComponent(paymentConfig.upiAccountName || APP_CONFIG.appName)}&am=${paymentPreview ? paymentPreview.grandTotal : amount}&cu=${paymentConfig.currency || "INR"}&tn=ServicePayment`}
                                     size={130}
                                   />
                                 </View>

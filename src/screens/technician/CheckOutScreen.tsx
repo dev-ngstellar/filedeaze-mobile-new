@@ -70,12 +70,15 @@ export const CheckOutScreen = () => {
   }, [attendance?.rawCheckInTime]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
 
   const handleCheckOut = async () => {
     if (isSubmitting || checkOutMutation.isPending) return;
     setIsSubmitting(true);
+    setStatusMsg("Acquiring GPS location...");
     try {
       const coords = await getFreshLocationForAttendance();
+      setStatusMsg("Recording check-out...");
       const res: any = await checkOutMutation.mutateAsync({
         latitude: coords.latitude,
         longitude: coords.longitude,
@@ -84,6 +87,12 @@ export const CheckOutScreen = () => {
       const attendanceData = res?.data;
       if (attendanceData?.checkInTime && attendanceData?.checkOutTime) {
         const diffMs = new Date(attendanceData.checkOutTime).getTime() - new Date(attendanceData.checkInTime).getTime();
+        const totalMins = Math.max(0, Math.floor(diffMs / 60000));
+        const h = Math.floor(totalMins / 60);
+        const m = totalMins % 60;
+        finalWorkingHours = `${h}h ${String(m).padStart(2, "0")}m`;
+      } else if (attendance?.rawCheckInTime) {
+        const diffMs = Math.max(0, Date.now() - new Date(attendance.rawCheckInTime).getTime());
         const totalMins = Math.floor(diffMs / 60000);
         const h = Math.floor(totalMins / 60);
         const m = totalMins % 60;
@@ -99,9 +108,18 @@ export const CheckOutScreen = () => {
         () => navigation.navigate("TechnicianHome")
       );
     } catch (err: any) {
-      showAlert("Check-Out Failed", "We couldn't record your check-out. Please check your location settings and try again.", "error");
+      const status = err?.response?.status;
+      const msg = err?.response?.data?.message || err?.message || "We couldn't record your check-out. Please check your location settings and try again.";
+      const displayMsg = Array.isArray(msg) ? msg.join("\n") : msg;
+
+      if (status === 409) {
+        showAlert("Attendance Conflict", displayMsg, "warning", () => navigation.navigate("TechnicianHome"));
+      } else {
+        showAlert("Check-Out Failed", displayMsg, "error");
+      }
     } finally {
       setIsSubmitting(false);
+      setStatusMsg("");
     }
   };
 
@@ -159,9 +177,10 @@ export const CheckOutScreen = () => {
 
         <View style={styles.actions}>
           <AppButton
-            title="Perform Check Out"
+            title={isSubmitting ? (statusMsg || "Checking Out...") : "Perform Check Out"}
             onPress={handleCheckOut}
-            loading={checkOutMutation.isPending}
+            loading={isSubmitting || checkOutMutation.isPending}
+            disabled={isSubmitting || checkOutMutation.isPending}
             variant="danger"
             size="lg"
             icon={<LogOut size={20} color="#ffffff" />}
@@ -171,6 +190,7 @@ export const CheckOutScreen = () => {
             onPress={() => navigation.goBack()}
             variant="outline"
             size="lg"
+            disabled={isSubmitting || checkOutMutation.isPending}
           />
         </View>
       </ScrollView>

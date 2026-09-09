@@ -156,6 +156,7 @@ export interface Ticket {
   invoiceSparePartsAmount?: number;
   invoiceAdditionalCharge?: number;
   invoiceDiscount?: number;
+  rawInvoice?: TechnicianInvoice;
   /** Whether service/labour were actually waived on the payment that was collected — the Invoice
    * row itself doesn't store this, only the Payment row does. */
   paymentServiceChargeWaived?: boolean;
@@ -199,10 +200,12 @@ export interface Ticket {
     gstin?: string;
     gstNumber?: string;
     logoUrl?: string | null;
+    sealUrl?: string | null;
     signatureUrl?: string | null;
     authorizedSignatureUrl?: string | null;
     termsAndConditions?: string | null;
   };
+  invoiceDetails?: InvoiceDetailsData;
   spareParts?: {
     id: string;
     sparePartId: string;
@@ -214,6 +217,75 @@ export interface Ticket {
   }[];
 }
 
+export interface InvoiceCompany {
+  companyName: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  phone?: string;
+  email?: string;
+  gstNumber?: string;
+  logoUrl?: string | null;
+  sealUrl?: string | null;
+}
+
+export interface InvoiceCustomer {
+  customerName: string;
+  customerAddress?: string;
+  customerCity?: string;
+  customerState?: string;
+  customerPincode?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  customerGstin?: string;
+}
+
+export interface InvoiceItem {
+  itemName: string;
+  description?: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface InvoiceBilling {
+  subtotal: number;
+  discount: number;
+  gstPercent: number;
+  gstAmount: number;
+  total: number;
+  receivedAmount: number;
+  balanceAmount: number;
+  amountInWords: string;
+}
+
+export interface InvoiceAuthorization {
+  companyName: string;
+  sealUrl?: string | null;
+  signatureUrl?: string | null;
+  authorizedSignatoryName: string;
+}
+
+export interface InvoiceDetailsData {
+  company: InvoiceCompany;
+  invoice: {
+    invoiceId: string;
+    invoiceNumber: string;
+    prefix: string;
+    invoiceDate: string;
+    invoiceTime: string;
+    billingType: string | null;
+    placeOfSupply?: string;
+  };
+  customer: InvoiceCustomer;
+  items: InvoiceItem[];
+  billing: InvoiceBilling;
+  termsAndConditions: string[];
+  authorization: InvoiceAuthorization;
+}
+
 export interface Invoice {
   invoiceNo: string;
   ticketNo: string;
@@ -221,6 +293,37 @@ export interface Invoice {
   gst: number;
   total: number;
   paymentStatus: "PAID" | "UNPAID";
+}
+
+export interface TechnicianInvoice {
+  id: string;
+  tenantId: string;
+  ticketId: string;
+  paymentId: string;
+  invoiceNumber: string;
+  prefix: string;
+  billingType: "WARRANTY" | "NON_WARRANTY" | "AMC" | null;
+  serviceCharge: number;
+  labourCharge: number;
+  sparePartsAmount: number;
+  additionalCharge: number;
+  discount: number;
+  subtotal: number;
+  gstPercent: number;
+  gstAmount: number;
+  total: number;
+  pdfUrl: string | null;
+  generatedAt: string;
+  ticket?: {
+    ticketNumber: string;
+    customer?: {
+      name: string;
+    };
+  };
+  payment?: {
+    method: string;
+    collectedAt: string | null;
+  };
 }
 
 export interface AttendanceLog {
@@ -234,6 +337,7 @@ export interface AttendanceLog {
   workingHours?: string;
   shiftCompleted?: boolean;
   rawCheckInTime?: string;
+  rawCheckOutTime?: string;
   completedTickets?: number;
 }
 
@@ -326,6 +430,7 @@ export function normalizeTicket(raw: any): Ticket {
     invoiceSparePartsAmount: raw.invoice?.sparePartsAmount != null ? Number(raw.invoice.sparePartsAmount) : undefined,
     invoiceAdditionalCharge: raw.invoice?.additionalCharge != null ? Number(raw.invoice.additionalCharge) : undefined,
     invoiceDiscount: raw.invoice?.discount != null ? Number(raw.invoice.discount) : undefined,
+    rawInvoice: raw.invoice ? (raw.invoice as TechnicianInvoice) : undefined,
     paymentServiceChargeWaived: raw.payment?.serviceChargeWaived ?? undefined,
     paymentLabourChargeWaived: raw.payment?.labourChargeWaived ?? undefined,
     paymentWarrantyPartsValue: raw.payment?.warrantyPartsValue != null ? Number(raw.payment.warrantyPartsValue) : (raw.invoice?.warrantySavings != null ? Number(raw.invoice.warrantySavings) : undefined),
@@ -391,9 +496,68 @@ export function normalizeTicket(raw: any): Ticket {
       gstin: raw.tenant.gstin ?? raw.tenant.gstNumber,
       gstNumber: raw.tenant.gstNumber ?? raw.tenant.gstin,
       logoUrl: raw.tenant.logoUrl ?? raw.tenant.logo,
+      sealUrl: raw.tenant.sealUrl ?? raw.tenant.companySealUrl ?? null,
       signatureUrl: raw.tenant.signatureUrl ?? raw.tenant.authorizedSignatureUrl ?? raw.tenant.signature,
       authorizedSignatureUrl: raw.tenant.authorizedSignatureUrl ?? raw.tenant.signatureUrl ?? raw.tenant.signature,
       termsAndConditions: raw.tenant.termsAndConditions ?? raw.tenant.terms,
+    } : undefined,
+    invoiceDetails: raw.invoiceDetails ? {
+      company: {
+        companyName: raw.invoiceDetails.company?.companyName || raw.tenant?.companyName || APP_CONFIG.appName,
+        address: raw.invoiceDetails.company?.address || raw.tenant?.address || "",
+        city: raw.invoiceDetails.company?.city || raw.tenant?.city || "",
+        state: raw.invoiceDetails.company?.state || raw.tenant?.state || "",
+        pincode: raw.invoiceDetails.company?.pincode || raw.tenant?.pincode || "",
+        phone: raw.invoiceDetails.company?.phone || raw.tenant?.phone || "",
+        email: raw.invoiceDetails.company?.email || raw.tenant?.email || "",
+        gstNumber: raw.invoiceDetails.company?.gstNumber || raw.tenant?.gstNumber || raw.tenantSetting?.gstNumber || "",
+        logoUrl: raw.invoiceDetails.company?.logoUrl || raw.tenant?.logoUrl || raw.tenantSetting?.upiQrImageUrl || null,
+        sealUrl: raw.invoiceDetails.company?.sealUrl || raw.tenant?.sealUrl || raw.tenantSetting?.sealUrl || null,
+      },
+      invoice: {
+        invoiceId: raw.invoiceDetails.invoice?.invoiceId || raw.invoice?.id || "",
+        invoiceNumber: raw.invoiceDetails.invoice?.invoiceNumber || raw.invoice?.invoiceNumber || (raw.ticketNumber ? `INV-${raw.ticketNumber}` : ""),
+        prefix: raw.invoiceDetails.invoice?.prefix || raw.invoice?.prefix || "INV",
+        invoiceDate: raw.invoiceDetails.invoice?.invoiceDate || "",
+        invoiceTime: raw.invoiceDetails.invoice?.invoiceTime || "",
+        billingType: raw.invoiceDetails.invoice?.billingType || raw.invoice?.billingType || raw.payment?.billingType || null,
+        placeOfSupply: raw.invoiceDetails.invoice?.placeOfSupply || raw.tenant?.state || raw.tenant?.city || "",
+      },
+      customer: {
+        customerName: raw.invoiceDetails.customer?.customerName || raw.customer?.name || raw.customerName || "—",
+        customerAddress: raw.invoiceDetails.customer?.customerAddress || raw.customer?.address || raw.serviceAddress || "",
+        customerCity: raw.invoiceDetails.customer?.customerCity || raw.customer?.city || "",
+        customerState: raw.invoiceDetails.customer?.customerState || raw.tenant?.state || "",
+        customerPincode: raw.invoiceDetails.customer?.customerPincode || raw.customer?.pincode || "",
+        customerPhone: raw.invoiceDetails.customer?.customerPhone || raw.customer?.phone || raw.customer?.alternatePhone || "",
+        customerEmail: raw.invoiceDetails.customer?.customerEmail || raw.customer?.email || "",
+        customerGstin: raw.invoiceDetails.customer?.customerGstin || raw.customer?.gstNumber || "",
+      },
+      items: Array.isArray(raw.invoiceDetails.items) ? raw.invoiceDetails.items.map((it: any) => ({
+        itemName: it.itemName,
+        description: it.description || "",
+        quantity: Number(it.quantity ?? 1),
+        unit: it.unit || "Nos",
+        unitPrice: Number(it.unitPrice ?? 0),
+        amount: Number(it.amount ?? 0),
+      })) : [],
+      billing: {
+        subtotal: Number(raw.invoiceDetails.billing?.subtotal ?? raw.invoice?.subtotal ?? 0),
+        discount: Number(raw.invoiceDetails.billing?.discount ?? raw.invoice?.discount ?? 0),
+        gstPercent: Number(raw.invoiceDetails.billing?.gstPercent ?? raw.invoice?.gstPercent ?? 0),
+        gstAmount: Number(raw.invoiceDetails.billing?.gstAmount ?? raw.invoice?.gstAmount ?? 0),
+        total: Number(raw.invoiceDetails.billing?.total ?? raw.invoice?.total ?? raw.payment?.amount ?? 0),
+        receivedAmount: Number(raw.invoiceDetails.billing?.receivedAmount ?? 0),
+        balanceAmount: Number(raw.invoiceDetails.billing?.balanceAmount ?? 0),
+        amountInWords: raw.invoiceDetails.billing?.amountInWords || "",
+      },
+      termsAndConditions: Array.isArray(raw.invoiceDetails.termsAndConditions) ? raw.invoiceDetails.termsAndConditions : [],
+      authorization: {
+        companyName: raw.invoiceDetails.authorization?.companyName || raw.tenant?.companyName || APP_CONFIG.appName,
+        sealUrl: raw.invoiceDetails.authorization?.sealUrl || raw.invoiceDetails.company?.sealUrl || raw.tenant?.sealUrl || null,
+        signatureUrl: raw.invoiceDetails.authorization?.signatureUrl || null,
+        authorizedSignatoryName: raw.invoiceDetails.authorization?.authorizedSignatoryName || "Authorized Signatory",
+      },
     } : undefined,
   };
 }
@@ -432,20 +596,25 @@ function normalizeAttendanceLog(raw: any): AttendanceLog {
   };
 }
 
-export function normalizeAttendanceRecord(raw: any): any {
+export function getBusinessDateStr(dateInput: Date | string | number = new Date()): string {
+  const d = typeof dateInput === "string" || typeof dateInput === "number" ? new Date(dateInput) : dateInput;
+  if (isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Kolkata",
+  }).format(d);
+}
+
+export function normalizeAttendanceRecord(raw: any, options?: { forDashboard?: boolean }): any {
   console.log("=== TRACE STEP 2: normalizeAttendanceRecord START ===");
   console.log("Raw input object:", JSON.stringify(raw, null, 2));
-  console.log("Extracted raw values:", {
-    checkInLocation: raw?.checkInLocation ?? raw?.data?.checkInLocation,
-    location: raw?.location ?? raw?.data?.location,
-    checkInRemarks: raw?.checkInRemarks ?? raw?.data?.checkInRemarks,
-    remarks: raw?.remarks ?? raw?.data?.remarks,
-  });
 
   if (!raw) {
     const emptyLog = {
       id: "",
-      date: "",
+      date: getBusinessDateStr(new Date()),
       checkedIn: false,
       checkInTime: undefined,
       checkOutTime: undefined,
@@ -454,6 +623,8 @@ export function normalizeAttendanceRecord(raw: any): any {
       location: "Location unavailable",
       status: "ABSENT",
       shiftCompleted: false,
+      rawCheckInTime: undefined,
+      rawCheckOutTime: undefined,
     };
     console.log("=== TRACE STEP 2: normalizeAttendanceRecord END (empty) ===", emptyLog);
     return emptyLog;
@@ -469,50 +640,92 @@ export function normalizeAttendanceRecord(raw: any): any {
         : rawData;
   const att = attCandidate || rawData;
 
-  // Check explicit boolean flags or presence of checkInTime without checkOutTime
-  const isExplicitlyCheckedIn = Boolean(
-    rawData.isCheckedIn === true ||
-    att.isCheckedIn === true ||
-    rawData.checkedIn === true ||
-    att.checkedIn === true ||
-    (Boolean(att.checkInTime || rawData.checkInTime) && !Boolean(att.checkOutTime || rawData.checkOutTime))
-  );
+  // Explicit check-in resolution
+  let isCheckedIn = false;
+  if (rawData.isCheckedIn !== undefined) {
+    isCheckedIn = Boolean(rawData.isCheckedIn);
+  } else if (att.isCheckedIn !== undefined) {
+    isCheckedIn = Boolean(att.isCheckedIn);
+  } else if (rawData.checkedIn !== undefined) {
+    isCheckedIn = Boolean(rawData.checkedIn);
+  } else if (att.checkedIn !== undefined) {
+    isCheckedIn = Boolean(att.checkedIn);
+  } else if (att.type === "CHECK_IN") {
+    isCheckedIn = true;
+  } else if (att.type === "CHECK_OUT") {
+    isCheckedIn = false;
+  } else {
+    isCheckedIn = Boolean((att.checkInTime || rawData.checkInTime) && !(att.checkOutTime || rawData.checkOutTime));
+  }
 
   const rawCheckInTimeStr = att.checkInTime || rawData.checkInTime || att.check_in_time || rawData.check_in_time;
   const rawCheckOutTimeStr = att.checkOutTime || rawData.checkOutTime || att.check_out_time || rawData.check_out_time;
 
-  const hasCheckedOut = Boolean(rawCheckOutTimeStr);
+  const forDashboard = Boolean(options?.forDashboard);
+  const todayDateStr = getBusinessDateStr(new Date());
 
-  const checkInTime: string | undefined = (isExplicitlyCheckedIn && rawCheckInTimeStr)
+  // Check if session belongs to today for dashboard display
+  if (forDashboard) {
+    const refDateStr = isCheckedIn
+      ? (rawCheckInTimeStr || att.timestamp || att.date)
+      : (rawCheckOutTimeStr || rawCheckInTimeStr || att.timestamp || att.date);
+    const isToday = refDateStr ? getBusinessDateStr(refDateStr) === todayDateStr : false;
+
+    if (!isToday && !isCheckedIn) {
+      // Prior day completed session or no attendance today -> show clean unstarted state
+      const unstartedLog = {
+        id: att.id ?? rawData.id ?? "",
+        date: todayDateStr,
+        checkedIn: false,
+        checkInTime: undefined,
+        checkOutTime: undefined,
+        checkInLocation: undefined,
+        checkInRemarks: undefined,
+        checkOutLocation: undefined,
+        checkOutRemarks: undefined,
+        workingHours: undefined,
+        location: undefined,
+        status: "ABSENT",
+        shiftCompleted: false,
+        rawCheckInTime: undefined,
+        rawCheckOutTime: undefined,
+        completedTickets: att.completedTickets ?? rawData.completedTickets ?? undefined,
+      };
+      console.log("=== TRACE STEP 2: normalizeAttendanceRecord END (prior day unstarted) ===", unstartedLog);
+      return unstartedLog;
+    }
+  }
+
+  // Format times in Asia/Kolkata timezone
+  const checkInTime: string | undefined = rawCheckInTimeStr
     ? new Date(rawCheckInTimeStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
-    : (rawCheckInTimeStr && hasCheckedOut)
-      ? new Date(rawCheckInTimeStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
-      : undefined;
+    : undefined;
 
-  const checkOutTime: string | undefined = rawCheckOutTimeStr
+  // When checked in, checkOutTime MUST be undefined/empty for current session
+  const checkOutTime: string | undefined = !isCheckedIn && rawCheckOutTimeStr
     ? new Date(rawCheckOutTimeStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })
     : undefined;
 
   let workingHours: string | undefined = att.workingHours ?? rawData.workingHours ?? undefined;
-  if (!workingHours && rawCheckInTimeStr && rawCheckOutTimeStr) {
+  if (!workingHours && rawCheckInTimeStr && rawCheckOutTimeStr && !isCheckedIn) {
     const diffMs = new Date(rawCheckOutTimeStr).getTime() - new Date(rawCheckInTimeStr).getTime();
-    const totalMins = Math.floor(diffMs / 60000);
+    const totalMins = Math.max(0, Math.floor(diffMs / 60000));
     const h = Math.floor(totalMins / 60);
     const m = totalMins % 60;
     workingHours = `${h}h ${String(m).padStart(2, "0")}m`;
   }
 
   let status: "PRESENT" | "ABSENT" | "HALF_DAY" | "LATE" = "ABSENT";
-  if (isExplicitlyCheckedIn || hasCheckedOut) {
+  if (isCheckedIn || rawCheckOutTimeStr) {
     status = "PRESENT";
-    if (att.checkInTime) {
+    if (rawCheckInTimeStr) {
       const formatter = new Intl.DateTimeFormat("en-US", {
         hour: "numeric",
         minute: "numeric",
         hour12: false,
         timeZone: "Asia/Kolkata",
       });
-      const formattedParts = formatter.formatToParts(new Date(att.checkInTime));
+      const formattedParts = formatter.formatToParts(new Date(rawCheckInTimeStr));
       const hourPart = formattedParts.find((p) => p.type === "hour")?.value;
       const minPart = formattedParts.find((p) => p.type === "minute")?.value;
       const hour = hourPart ? parseInt(hourPart, 10) : 0;
@@ -523,15 +736,9 @@ export function normalizeAttendanceRecord(raw: any): any {
   }
 
   let dateStr = "";
-  const baseDate = att.checkInTime || att.createdAt || att.date || rawData.date;
+  const baseDate = rawCheckInTimeStr || rawCheckOutTimeStr || att.timestamp || att.createdAt || att.date || rawData.date;
   if (baseDate) {
-    const formatter = new Intl.DateTimeFormat("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      timeZone: "Asia/Kolkata",
-    });
-    dateStr = formatter.format(new Date(baseDate));
+    dateStr = getBusinessDateStr(baseDate);
   }
 
   // Helper to extract location string from remarks, location object {lat, lng}, or string
@@ -572,8 +779,8 @@ export function normalizeAttendanceRecord(raw: any): any {
   const normalized = {
     id: att.id ?? rawData.id ?? "",
     date: dateStr,
-    checkedIn: isExplicitlyCheckedIn && !hasCheckedOut,
-    checkInTime: isExplicitlyCheckedIn || hasCheckedOut ? checkInTime : undefined,
+    checkedIn: isCheckedIn,
+    checkInTime,
     checkInLocation: checkInLocationStr !== "Location unavailable" ? checkInLocationStr : undefined,
     checkInRemarks: rawCheckInRemarks ?? undefined,
     checkOutTime,
@@ -582,8 +789,9 @@ export function normalizeAttendanceRecord(raw: any): any {
     workingHours,
     location: checkInLocationStr !== "Location unavailable" ? checkInLocationStr : undefined,
     status,
-    shiftCompleted: (isExplicitlyCheckedIn || hasCheckedOut) && hasCheckedOut,
-    rawCheckInTime: isExplicitlyCheckedIn || hasCheckedOut ? (rawCheckInTimeStr ?? undefined) : undefined,
+    shiftCompleted: !isCheckedIn && Boolean(rawCheckOutTimeStr),
+    rawCheckInTime: rawCheckInTimeStr ?? undefined,
+    rawCheckOutTime: !isCheckedIn ? (rawCheckOutTimeStr ?? undefined) : undefined,
     completedTickets: att.completedTickets ?? rawData.completedTickets ?? undefined,
   };
 
@@ -657,11 +865,12 @@ export class JobService {
   }
 
   /**
-   * Fetches customer's existing assets for assignment using /mobile/customer/assets.
+   * Fetches customer's existing assets for assignment using /mobile/technician/tickets/:id/customer-assets.
    */
   static async getCustomerAssetsForTicket(ticketId: string): Promise<any[]> {
+    if (!ticketId) return [];
     try {
-      const res = await apiClient.get<any>(`/mobile/customer/assets`);
+      const res = await apiClient.get<any>(`${BASE}/tickets/${ticketId}/customer-assets`);
       const rawList = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
       return rawList;
     } catch {
@@ -1025,7 +1234,41 @@ export class JobService {
     console.log("Dashboard API response object:", JSON.stringify(response.data, null, 2));
 
     const rawData = response.data?.data || response.data || {};
-    const normalized = normalizeAttendanceRecord(rawData);
+
+    // Fallback: If checked out and checkInTime is missing/null, look up preceding CHECK_IN from history
+    if (!rawData.isCheckedIn && !rawData.checkInTime && rawData.checkOutTime) {
+      try {
+        const historyRes = await apiClient.get<{ success: boolean; data: any[] }>(`${BASE}/attendance`);
+        const historyList: any[] = Array.isArray(historyRes.data) ? historyRes.data : historyRes.data?.data ?? [];
+        const checkOutTimeMs = new Date(rawData.checkOutTime).getTime();
+
+        const checkIns = historyList
+          .filter((rec: any) => rec.type === "CHECK_IN" && (rec.timestamp || rec.checkInTime))
+          .map((rec: any) => ({
+            ...rec,
+            timeMs: new Date(rec.checkInTime || rec.timestamp).getTime(),
+          }))
+          .filter((rec: any) => rec.timeMs <= checkOutTimeMs)
+          .sort((a: any, b: any) => b.timeMs - a.timeMs);
+
+        if (checkIns.length > 0) {
+          rawData.checkInTime = checkIns[0].checkInTime || checkIns[0].timestamp;
+          if (!rawData.checkInRemarks && checkIns[0].checkInRemarks) {
+            rawData.checkInRemarks = checkIns[0].checkInRemarks;
+          }
+          if (!rawData.checkInLocation && (checkIns[0].checkInLat != null || checkIns[0].checkInLocation)) {
+            rawData.checkInLocation = checkIns[0].checkInLocation || {
+              lat: checkIns[0].checkInLat,
+              lng: checkIns[0].checkInLng,
+            };
+          }
+        }
+      } catch (err) {
+        console.warn("Fallback attendance history query failed:", err);
+      }
+    }
+
+    const normalized = normalizeAttendanceRecord(rawData, { forDashboard: true });
     console.log("=== TRACE STEP 1: getAttendanceStatus END ===");
     console.log("Returned Object:", JSON.stringify(normalized, null, 2));
     return normalized;
@@ -1043,7 +1286,7 @@ export class JobService {
     if (year !== undefined) params.year = year;
     const res = await apiClient.get<{ success: boolean; data: any[] }>(`${BASE}/attendance`, { params });
     const rawList = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-    return rawList.map(normalizeAttendanceRecord);
+    return rawList.map((item) => normalizeAttendanceRecord(item));
   }
 
   /**
@@ -1120,7 +1363,7 @@ export class JobService {
   /**
    * GET /mobile/technician/invoices
    */
-  static async getTechnicianInvoices(month?: number, year?: number): Promise<any[]> {
+  static async getTechnicianInvoices(month?: number, year?: number): Promise<TechnicianInvoice[]> {
     const params: any = {};
     if (month !== undefined) params.month = month;
     if (year !== undefined) params.year = year;

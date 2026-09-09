@@ -8,6 +8,7 @@ import { CustomerNavigator } from "./CustomerNavigator";
 import { TechnicianNavigator } from "./TechnicianNavigator";
 import { useAuthStore } from "../store/auth.store";
 import { registerDeviceToken } from "../services/notificationService";
+import { APP_CONFIG } from "../config/app.config";
 
 const hasFirebase = !!NativeModules.RNFBAppModule;
 const getMessaging = () => {
@@ -49,7 +50,7 @@ function NotificationHandler() {
         console.log('[NotificationHandler] Foreground notification received:', JSON.stringify(remoteMessage, null, 2));
         const { title, body } = remoteMessage.notification ?? {};
         Alert.alert(
-          title ?? "FieldEaze",
+          title ?? APP_CONFIG.appName,
           body ?? "",
           [
             { text: "Dismiss", style: "cancel" },

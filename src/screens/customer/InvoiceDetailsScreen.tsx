@@ -20,6 +20,7 @@ import { AppLoader } from "../../components/AppLoader";
 import { AppButton } from "../../components/AppButton";
 import { AppAlertModal } from "../../components/AppAlertModal";
 import { numberToIndianWords } from "../../utils/numberToWords";
+import { APP_CONFIG } from "../../config/app.config";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "InvoiceDetails">;
 type RouteProps = RouteProp<CustomerStackParamList, "InvoiceDetails">;
@@ -75,6 +76,7 @@ export const InvoiceDetailsScreen = () => {
       return "";
     }
   };
+  
 
   const generatePDFHtml = (
     invNum: string,
@@ -115,7 +117,8 @@ export const InvoiceDetailsScreen = () => {
             line-height: 1.45;
           }
           .receipt-box { max-width: 680px; margin: auto; }
-          .header-row { display: flex; justify-content: space-between; align-items: flex-start; }
+          .header-row { display: flex; justify-content: space-between; align-items: center; }
+          .company-col { flex: 1; padding-right: 16px; }
           .company-title {
             font-size: 16px;
             font-weight: 800;
@@ -124,7 +127,8 @@ export const InvoiceDetailsScreen = () => {
             letter-spacing: 0.5px;
           }
           .company-meta { font-size: 11px; color: #374151; margin-top: 2px; }
-          .header-logo { max-height: 52px; max-width: 140px; object-fit: contain; }
+          .logo-col { width: 120px; text-align: right; }
+          .header-logo { max-height: 60px; max-width: 110px; object-fit: contain; }
           .green-line { height: 1.5px; background: #15803d; margin: 14px 0 16px 0; width: 100%; }
           .receipt-title {
             font-size: 18px;
@@ -155,15 +159,19 @@ export const InvoiceDetailsScreen = () => {
         <div class="receipt-box">
           <!-- 1. Header: Company Info (Left) & Logo (Right) -->
           <div class="header-row">
-            <div>
+            <div class="company-col">
               <div class="company-title">${company.name}</div>
               ${company.address ? `<div class="company-meta">${company.address}</div>` : ""}
               ${company.cityPin ? `<div class="company-meta">${company.cityPin}</div>` : ""}
-              ${company.phone ? `<div class="company-meta">Phone: ${company.phone}</div>` : ""}
-              ${company.gstin ? `<div class="company-meta">GSTIN: ${company.gstin}</div>` : ""}
+              ${company.phone ? `<div class="company-meta">Phone no: ${company.phone}</div>` : ""}
               ${company.state ? `<div class="company-meta">State: ${company.state}</div>` : ""}
+              ${company.gstin ? `<div class="company-meta">GSTIN: ${company.gstin}</div>` : ""}
             </div>
-            ${company.logoUrl ? `<div><img src="${company.logoUrl}" class="header-logo" /></div>` : ""}
+            ${company.logoUrl ? `
+              <div class="logo-col">
+                <img src="${company.logoUrl}" class="header-logo" alt="Logo" />
+              </div>
+            ` : ""}
           </div>
 
           <!-- Thin Green Divider -->
@@ -272,7 +280,7 @@ export const InvoiceDetailsScreen = () => {
   const customerCityPin = [customerCity, customerPincode].filter(Boolean).join(" - ");
 
   // Company Details (From Tenant API data)
-  const companyName = tenant?.companyName || "FieldEaze Services";
+  const companyName = tenant?.companyName || APP_CONFIG.appName;
   const companyAddress = tenant?.address || "";
   const companyCity = tenant?.city || "";
   const companyPincode = (tenant as any)?.pincode || "";
@@ -283,7 +291,13 @@ export const InvoiceDetailsScreen = () => {
   const logoUrl = tenant?.logoUrl || null;
 
   // Authorization details (Dynamic from API; gracefully null if not configured)
-  const sealUrl = (tenant as any)?.sealUrl || (tenant as any)?.companySealUrl || (settings as any)?.sealUrl || null;
+  const sealUrl =
+    tenant?.sealUrl ||
+    (tenant as any)?.companySealUrl ||
+    (settings as any)?.sealUrl ||
+    (invoice as any)?.tenant?.sealUrl ||
+    (invoice as any)?.sealUrl ||
+    null;
   const signatoryText = (tenant as any)?.authorizedSignatoryName || (settings as any)?.authorizedSignatoryName || "Authorized Signatory";
 
   const handleDownload = async () => {
@@ -380,9 +394,9 @@ export const InvoiceDetailsScreen = () => {
               <Text style={styles.companyName}>{companyName}</Text>
               {companyAddress ? <Text style={styles.companyMeta}>{companyAddress}</Text> : null}
               {companyCityPin ? <Text style={styles.companyMeta}>{companyCityPin}</Text> : null}
-              {companyPhone ? <Text style={styles.companyMeta}>Phone: {companyPhone}</Text> : null}
-              {companyGstin ? <Text style={styles.companyMeta}>GSTIN: {companyGstin}</Text> : null}
+              {companyPhone ? <Text style={styles.companyMeta}>Phone no.: {companyPhone}</Text> : null}
               {companyState ? <Text style={styles.companyMeta}>State: {companyState}</Text> : null}
+              {companyGstin ? <Text style={styles.companyMeta}>GSTIN: {companyGstin}</Text> : null}
             </View>
 
             {logoUrl ? (
@@ -521,18 +535,18 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
   },
   companyDetailsCol: {
     flex: 1,
-    paddingRight: 10,
+    paddingRight: 16,
   },
   companyName: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "800",
     color: "#0f172a",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
     marginBottom: 3,
   },
   companyMeta: {
@@ -542,12 +556,13 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
   logoCol: {
+    width: 100,
     alignItems: "flex-end",
-    justifyContent: "flex-start",
+    justifyContent: "center",
   },
   companyLogo: {
-    width: 100,
-    height: 48,
+    width: 90,
+    height: 60,
   },
 
   // Thin Green Horizontal Line
@@ -656,6 +671,11 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   sealImage: {
+    width: 80,
+    height: 60,
+    marginVertical: 4,
+  },
+  companySeal: {
     width: 80,
     height: 60,
     marginVertical: 4,

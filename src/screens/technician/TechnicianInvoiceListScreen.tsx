@@ -22,6 +22,7 @@ import {
 
 import { useTheme } from "../../theme";
 import { useTechnicianInvoices } from "../../hooks/useJobs";
+import { TechnicianInvoice } from "../../services/job.service";
 import { TechnicianStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
@@ -72,7 +73,7 @@ export const TechnicianInvoiceListScreen = () => {
     return Array.isArray(invoices) ? invoices : [];
   }, [invoices]);
 
-  const renderInvoiceCard = ({ item }: { item: any }) => {
+  const renderInvoiceCard = ({ item }: { item: TechnicianInvoice }) => {
     const formattedDate = item.generatedAt
       ? new Date(item.generatedAt).toLocaleDateString("en-IN", {
           day: "2-digit",
@@ -87,6 +88,7 @@ export const TechnicianInvoiceListScreen = () => {
         <Pressable
           onPress={() =>
             navigation.navigate("InvoiceGenerate", {
+              invoice: item,
               jobId: item.ticketId,
               ticketNo: item.ticket?.ticketNumber || item.invoiceNumber,
               amount: Number(item.total),
@@ -107,7 +109,9 @@ export const TechnicianInvoiceListScreen = () => {
                 #{item.invoiceNumber}
               </Text>
             </View>
-            <AppBadge label="PAID" variant="success" />
+            {item.billingType ? (
+              <AppBadge label={item.billingType.replace("_", " ")} variant="primary" />
+            ) : null}
           </View>
 
           <View style={[styles.divider, { backgroundColor: theme.colors.borderLight }]} />

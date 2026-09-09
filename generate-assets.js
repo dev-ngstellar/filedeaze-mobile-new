@@ -23,6 +23,10 @@ console.log("Generating Expo asset placeholders...");
 
 filesToGenerate.forEach((filename) => {
   const filePath = path.join(ASSETS_DIR, filename);
+  if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1000) {
+    console.log(`Skipping (already exists and has content): ${filePath}`);
+    return;
+  }
   fs.writeFileSync(filePath, pngBuffer);
   console.log(`Generated: ${filePath}`);
 });

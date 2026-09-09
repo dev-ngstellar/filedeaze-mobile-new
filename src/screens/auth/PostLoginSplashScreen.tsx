@@ -95,18 +95,12 @@ export const PostLoginSplashScreen = () => {
         {/* Logo section */}
         <View style={styles.logoWrapper}>
           <View style={styles.logoRingOuter}>
-            <View style={styles.logoRingInner}>
-              {(APP_CONFIG as any).logo ? (
-                <Image
-                  source={{ uri: (APP_CONFIG as any).logo }}
-                  style={styles.logoImage}
-                  resizeMode="contain"
-                />
-              ) : (
-                <View style={[styles.logoFallback, { backgroundColor: "rgba(255,255,255,0.2)" }]}>
-                  <Shield color="#ffffff" size={44} strokeWidth={1.8} />
-                </View>
-              )}
+            <View style={[styles.logoRingInner, { backgroundColor: "#ffffff" }]}>
+              <Image
+                source={require("../../assets/icon-logo.png")}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
             </View>
           </View>
         </View>

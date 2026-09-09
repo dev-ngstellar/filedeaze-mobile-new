@@ -39,6 +39,8 @@ export type CustomerStackParamList = {
   CustomerCredit: undefined;
 };
 
+import { TechnicianInvoice } from "../services/job.service";
+
 export type TechnicianStackParamList = {
   PostLoginSplash: undefined;
   TechnicianHome: undefined;
@@ -52,7 +54,19 @@ export type TechnicianStackParamList = {
   CheckOut: undefined;
   TravelTracking: { jobId: string; ticketNo: string; address: string };
   WorkTimer: { jobId: string; ticketNo: string };
-  InvoiceGenerate: { jobId: string; ticketNo: string; amount: number; paymentMethod: string; invoiceNo: string; invoiceSubtotal?: number; invoiceGstAmount?: number; invoiceGstPercent?: number; invoiceTotal?: number; invoiceGeneratedAt?: string };
+  InvoiceGenerate: {
+    invoice?: TechnicianInvoice;
+    jobId: string;
+    ticketNo: string;
+    amount?: number;
+    paymentMethod?: string;
+    invoiceNo?: string;
+    invoiceSubtotal?: number;
+    invoiceGstAmount?: number;
+    invoiceGstPercent?: number;
+    invoiceTotal?: number;
+    invoiceGeneratedAt?: string;
+  };
   ShareInvoice: { jobId: string; ticketNo: string; invoiceNo: string; customerMobile?: string; customerEmail?: string };
   NotificationList: undefined;
 };

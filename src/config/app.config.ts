@@ -7,7 +7,7 @@ const getApiBaseUrl = (): string => {
   }
   if (Platform.OS === "web") {
     return "http://localhost:3000/api/v1";
-  }
+  }   
   // Dynamically extract the Metro host IP (e.g. 192.168.1.8) on mobile devices
   const debuggerHost =
     Constants.expoConfig?.hostUri ||

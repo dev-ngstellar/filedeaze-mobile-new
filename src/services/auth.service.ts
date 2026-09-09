@@ -1,5 +1,21 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiClient } from "../api/client";
 import { APP_CONFIG } from "../config/app.config";
+import { APP_CONSTANTS } from "../constants";
+
+export interface TenantBrandingInfo {
+  companyName: string;
+  tenantCode: string;
+  logoUrl?: string | null;
+  sealUrl?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  gstNumber?: string | null;
+}
+
+let cachedTenantBranding: TenantBrandingInfo | null = null;
 
 export interface LoginResponse {
   success: boolean;
@@ -16,102 +32,188 @@ export interface LoginResponse {
 
 export class AuthService {
   /**
-   * Unified Login (tries customer first, falls back to technician)
+   * Fetch current tenant branding and company info dynamically with in-memory caching
    */
-  static async login(email: string, password: string): Promise<LoginResponse> {
-    return new Promise((resolve, reject) => {
-      let resolved = false;
-      let rejectedCount = 0;
-      const errors: any[] = [];
+  static async getTenantBranding(tenantCode?: string): Promise<TenantBrandingInfo | null> {
+    if (cachedTenantBranding && (!tenantCode || cachedTenantBranding.tenantCode === tenantCode)) {
+      return cachedTenantBranding;
+    }
+    try {
+      const code =
+        tenantCode ||
+        (await AsyncStorage.getItem(APP_CONSTANTS.storageKeys.tenantCode)) ||
+        APP_CONFIG.tenantCode;
+      const response = await apiClient.get(`/auth/tenant/${code}/info`);
+      if (response.data?.data) {
+        cachedTenantBranding = response.data.data;
+        return cachedTenantBranding;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
 
-      const handleSuccess = (res: LoginResponse) => {
-        if (!resolved) {
-          resolved = true;
-          resolve(res);
-        }
-      };
-
-      const handleFailure = (err: any) => {
-        rejectedCount++;
-        const statusCode = err.response?.status || err.status;
-        const errorCode = err.code || err.originalError?.code;
-        const errorMessage = err.response?.data?.message || err.message;
-        errors.push({ status: statusCode, code: errorCode, message: errorMessage, originalError: err });
-
-        if (rejectedCount === 2 && !resolved) {
-          const getPriority = (e: any) => {
-            const s = e.status;
-            const c = String(e.code || e.originalError?.code || "").toUpperCase();
-            const m = String(e.message || "").toLowerCase();
-
-            if (typeof s === "number" && s >= 500) return 100;
-            if (c === "ECONNABORTED" || c === "ETIMEDOUT" || m.includes("timeout")) return 90;
-            if (c === "ERR_NETWORK" || m.includes("network") || (!s && m.includes("connect"))) return 80;
-            if (s === 404) return 70;
-            if (s === 401) return 60;
-            if (typeof s === "number") return 50;
-            return 10;
-          };
-
-          const firstErr = errors[0];
-          const secondErr = errors[1];
-          const primaryErr = getPriority(secondErr) > getPriority(firstErr) ? secondErr : firstErr;
-
-          const msg = primaryErr.message || "Authentication failed.";
-          const customErr: any = new Error(msg);
-          customErr.status = primaryErr.status;
-          customErr.code = primaryErr.code || primaryErr.originalError?.code;
-          customErr.response = primaryErr.originalError?.response || primaryErr.originalError;
-          reject(customErr);
-        }
-      };
-
-      // 1. Try customer login
-      apiClient.post("/auth/customer/login", {
-        tenantId: APP_CONFIG.tenantId,
-        email,
-        password,
-      }).then((response) => {
-        const { user, tokens } = response.data.data;
-        handleSuccess({
-          success: true,
-          token: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          user: {
-            id: user.id,
-            name: user.name,
-            mobile: user.phone || "",
-            role: user.role,
-            email: user.email,
-          },
-        });
-      }).catch((err) => {
-        handleFailure(err);
-      });
-
-      // 2. Try technician login
-      apiClient.post("/auth/technician/login", {
-        tenantId: APP_CONFIG.tenantId,
-        email,
-        password,
-      }).then((response) => {
-        const { user, tokens } = response.data.data;
-        handleSuccess({
-          success: true,
-          token: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          user: {
-            id: user.id,
-            name: user.name,
-            mobile: user.phone || "",
-            role: user.role,
-            email: user.email,
-          },
-        });
-      }).catch((err) => {
-        handleFailure(err);
-      });
+  /**
+   * Customer Login — Calls POST /auth/customer/login
+   */
+  static async customerLogin(email: string, password: string): Promise<LoginResponse> {
+    const response = await apiClient.post("/auth/customer/login", {
+      tenantId: APP_CONFIG.tenantId,
+      email,
+      password,
     });
+    const { user, tokens } = response.data.data;
+    return {
+      success: true,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        mobile: user.phone || "",
+        role: user.role,
+        email: user.email,
+      },
+    };
+  }
+
+  /**
+   * Technician Login — Calls POST /auth/technician/login
+   */
+  static async technicianLogin(email: string, password: string): Promise<LoginResponse> {
+    const response = await apiClient.post("/auth/technician/login", {
+      tenantId: APP_CONFIG.tenantId,
+      email,
+      password,
+    });
+    const { user, tokens } = response.data.data;
+    return {
+      success: true,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        mobile: user.phone || "",
+        role: user.role,
+        email: user.email,
+      },
+    };
+  }
+
+  private static readonly ROLE_MAP_KEY = "@user_known_role_map";
+
+  static async getKnownRole(email: string): Promise<"CUSTOMER" | "TECHNICIAN" | null> {
+    try {
+      const raw = await AsyncStorage.getItem(AuthService.ROLE_MAP_KEY);
+      if (!raw) return null;
+      const map = JSON.parse(raw);
+      return map[email.trim().toLowerCase()] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  static async saveKnownRole(email: string, role: "CUSTOMER" | "TECHNICIAN"): Promise<void> {
+    try {
+      const clean = email.trim().toLowerCase();
+      const raw = await AsyncStorage.getItem(AuthService.ROLE_MAP_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      map[clean] = role;
+      await AsyncStorage.setItem(AuthService.ROLE_MAP_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
+  /**
+   * Login — Dispatches strictly to customerLogin or technicianLogin based on role
+   */
+  static async login(
+    email: string,
+    password: string,
+    role?: "CUSTOMER" | "TECHNICIAN",
+  ): Promise<LoginResponse> {
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. If role is explicitly provided, use it directly
+    if (role === "CUSTOMER") {
+      const res = await this.customerLogin(email, password);
+      await this.saveKnownRole(cleanEmail, "CUSTOMER");
+      return res;
+    }
+    if (role === "TECHNICIAN") {
+      const res = await this.technicianLogin(email, password);
+      await this.saveKnownRole(cleanEmail, "TECHNICIAN");
+      return res;
+    }
+
+    // 2. Check if we already know this user's role from previous logins
+    const knownRole = await this.getKnownRole(cleanEmail);
+    if (knownRole === "TECHNICIAN") {
+      try {
+        const res = await this.technicianLogin(email, password);
+        await this.saveKnownRole(cleanEmail, "TECHNICIAN");
+        return res;
+      } catch (err: any) {
+        const status = err?.response?.status || err?.status;
+        if (status === 401 || status === 404) {
+          const res = await this.customerLogin(email, password);
+          await this.saveKnownRole(cleanEmail, "CUSTOMER");
+          return res;
+        }
+        throw err;
+      }
+    }
+
+    if (knownRole === "CUSTOMER") {
+      try {
+        const res = await this.customerLogin(email, password);
+        await this.saveKnownRole(cleanEmail, "CUSTOMER");
+        return res;
+      } catch (err: any) {
+        const status = err?.response?.status || err?.status;
+        if (status === 401 || status === 404) {
+          const res = await this.technicianLogin(email, password);
+          await this.saveKnownRole(cleanEmail, "TECHNICIAN");
+          return res;
+        }
+        throw err;
+      }
+    }
+
+    // 3. Heuristic for first-time login when role is not yet cached:
+    const likelyTechnician = cleanEmail.includes("tech") || cleanEmail === "raja@gamil.com";
+
+    if (likelyTechnician) {
+      try {
+        const res = await this.technicianLogin(email, password);
+        await this.saveKnownRole(cleanEmail, "TECHNICIAN");
+        return res;
+      } catch (err: any) {
+        const status = err?.response?.status || err?.status;
+        if (status === 401 || status === 404) {
+          const res = await this.customerLogin(email, password);
+          await this.saveKnownRole(cleanEmail, "CUSTOMER");
+          return res;
+        }
+        throw err;
+      }
+    }
+
+    // Default: try customer first, then technician fallback
+    try {
+      const res = await this.customerLogin(email, password);
+      await this.saveKnownRole(cleanEmail, "CUSTOMER");
+      return res;
+    } catch (err: any) {
+      const status = err?.response?.status || err?.status;
+      if (status === 401 || status === 404) {
+        const res = await this.technicianLogin(email, password);
+        await this.saveKnownRole(cleanEmail, "TECHNICIAN");
+        return res;
+      }
+      throw err;
+    }
   }
 
   /**

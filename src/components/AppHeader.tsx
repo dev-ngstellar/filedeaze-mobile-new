@@ -33,7 +33,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const unreadNotifCount = useUnreadNotificationCount();
-  const { hasActiveAmc } = useCustomerHasActiveAmc();
+  const isCustomer = user?.role === "CUSTOMER";
+  const { hasActiveAmc } = useCustomerHasActiveAmc({ enabled: isCustomer });
 
   // Auto-detect navigation so we never need to pass showBack manually on child screens.
   // Wrapped in try/catch because AppHeader is sometimes rendered outside a navigator context.
@@ -55,7 +56,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const resolvedShowBack = showBack !== undefined ? showBack : canGoBack;
   const resolvedOnBackPress = onBackPress ?? defaultGoBack;
 
-  const isCustomer = user?.role === "CUSTOMER";
   const currentRouteName = nav?.getCurrentRoute?.()?.name;
   const showCustomerHeaderActions = isCustomer && currentRouteName !== "NotificationList" && title !== "Notifications";
 

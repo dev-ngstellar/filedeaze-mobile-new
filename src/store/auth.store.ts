@@ -28,7 +28,7 @@ interface AuthState {
   _hasHydrated: boolean;
 
   // Actions
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, role?: "CUSTOMER" | "TECHNICIAN") => Promise<void>;
   logout: () => void;
   clearError: () => void;
   setHasHydrated: (val: boolean) => void;
@@ -50,10 +50,10 @@ export const useAuthStore = create<AuthState>()(
       setHasHydrated: (val: boolean) => set({ _hasHydrated: val }),
       updateAvatar: (url: string) => set((state) => ({ user: state.user ? { ...state.user, avatar: url } : null })),
 
-      login: async (email, password) => {
+      login: async (email, password, role) => {
         set({ isLoading: true, error: null });
         try {
-          const res = await AuthService.login(email, password);
+          const res = await AuthService.login(email, password, role);
 
           const userProfile: UserProfile = {
             id: res.user.id,

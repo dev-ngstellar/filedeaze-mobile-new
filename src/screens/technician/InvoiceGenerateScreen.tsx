@@ -1,30 +1,29 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  Platform,
-  BackHandler,
   Image,
+  BackHandler,
 } from "react-native";
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Share2, Download, CheckCircle2 } from "lucide-react-native";
-import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
-import { useQuery } from "@tanstack/react-query";
+import * as Print from "expo-print";
+import { Download, Share2 } from "lucide-react-native";
 
 import { useTheme } from "../../theme";
-import { APP_CONFIG } from "../../config/app.config";
 import { TechnicianStackParamList } from "../../types/navigation.types";
 import { useJobDetails } from "../../hooks/useJobs";
-import { PaymentService } from "../../services/payment.service";
-import { numberToIndianWords } from "../../utils/numberToWords";
 import { AppHeader } from "../../components/AppHeader";
-import { AppButton } from "../../components/AppButton";
 import { AppLoader } from "../../components/AppLoader";
+import { AppButton } from "../../components/AppButton";
 import { AppAlertModal } from "../../components/AppAlertModal";
+import { numberToIndianWords } from "../../utils/numberToWords";
+import { APP_CONFIG } from "../../config/app.config";
+import { AuthService, TenantBrandingInfo } from "../../services/auth.service";
+import { PaymentService, MobilePaymentConfig } from "../../services/payment.service";
 
 type RouteProps = RouteProp<TechnicianStackParamList, "InvoiceGenerate">;
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "InvoiceGenerate">;
@@ -34,11 +33,45 @@ export const InvoiceGenerateScreen = () => {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
 
+  const [downloading, setDownloading] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertTitle, setAlertTitle] = useState("");
+  const [alertMessage, setAlertMessage] = useState("");
+  const [alertType, setAlertType] = useState<"success" | "error" | "warning">("success");
+  const [tenantInfo, setTenantInfo] = useState<TenantBrandingInfo | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<MobilePaymentConfig | null>(null);
+
+  useEffect(() => {
+    AuthService.getTenantBranding()
+      .then((info) => {
+        if (info) setTenantInfo(info);
+      })
+      .catch(() => {});
+
+    PaymentService.getMobilePaymentConfig()
+      .then((cfg) => {
+        if (cfg) setPaymentConfig(cfg);
+      })
+      .catch(() => {});
+  }, []);
+
+  const showAlert = (title: string, message: string, type: "success" | "error" | "warning" = "success") => {
+    setAlertTitle(title);
+    setAlertMessage(message);
+    setAlertType(type);
+    setAlertVisible(true);
+  };
+
   const handleBack = () => {
-    navigation.reset({
-      index: 0,
-      routes: [{ name: "TechnicianHome" }],
-    });
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.reset({
+        index: 0,
+        routes: [{ name: "TechnicianHome" }],
+      });
+    }
   };
 
   useFocusEffect(
@@ -49,566 +82,501 @@ export const InvoiceGenerateScreen = () => {
       };
 
       const subscription = BackHandler.addEventListener("hardwareBackPress", onBackPress);
-
       return () => subscription.remove();
     }, [navigation])
   );
 
   const {
+    invoice: paramInvoice,
+    company: paramCompany,
     jobId,
     ticketNo,
     amount: initialAmount,
-    paymentMethod: initialPaymentMethod,
     invoiceNo,
     invoiceSubtotal,
     invoiceGstAmount,
     invoiceGstPercent,
     invoiceTotal,
     invoiceGeneratedAt,
-  } = route.params;
+  } = (route.params as any) || {};
 
-  const { data: job, isLoading } = useJobDetails(jobId);
-  const { data: paymentConfig } = useQuery({
-    queryKey: ["mobilePaymentConfig"],
-    queryFn: PaymentService.getMobilePaymentConfig,
-    staleTime: 60_000,
-  });
+  // Resolve target ticket identifier for fetching details
+  const effectiveJobId = jobId || (paramInvoice as any)?.ticketId || ticketNo || "";
+  const { data: job, isLoading: isJobLoading } = useJobDetails(effectiveJobId);
 
-  const [downloading, setDownloading] = useState(false);
-  const [alertVisible, setAlertVisible] = useState(false);
-  const [alertTitle, setAlertTitle] = useState("");
-  const [alertMessage, setAlertMessage] = useState("");
-  const [alertType, setAlertType] = useState<"success" | "error" | "warning">("success");
-
-  const paymentMethod = initialPaymentMethod || job?.paymentMethod || "CASH";
-  const paymentStatus = job?.paymentStatus || "COLLECTED";
-
-  // Exact Persisted Invoice Amounts from Backend / Route params
-  const serviceCharge = job?.invoiceServiceCharge ?? 0;
-  const labourCharge = job?.invoiceLabourCharge ?? 0;
-  const sparePartsAmount = job?.invoiceSparePartsAmount ?? 0;
-  const additionalCharge = job?.invoiceAdditionalCharge ?? 0;
-  const discount = job?.invoiceDiscount ?? 0;
-  const baseAmount = job?.invoiceSubtotal ?? invoiceSubtotal ?? 0;
-  const gstAmount = job?.invoiceGstAmount ?? invoiceGstAmount ?? 0;
-  const gstPercent = job?.invoiceGstPercent ?? invoiceGstPercent ?? (paymentConfig?.gstPercent ?? 0);
-  const totalAmount = job?.invoiceTotal ?? invoiceTotal ?? initialAmount ?? 0;
-
-  const rawInvoiceDate = job?.invoiceGeneratedAt ?? invoiceGeneratedAt;
-  const invoiceDate = rawInvoiceDate
-    ? new Date(rawInvoiceDate).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        timeZone: "Asia/Kolkata",
-      })
-    : new Date().toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      });
-
-  const invoiceTime = rawInvoiceDate
-    ? new Date(rawInvoiceDate).toLocaleTimeString("en-IN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: "Asia/Kolkata",
-      })
-    : "";
-
-  // Dynamic Tenant Branding & Details (No hardcoded reference companies)
-  const tenantName = job?.tenant?.companyName || APP_CONFIG.appName || "FIELDEAZE";
-  const tenantAddress = job?.tenant?.address || "";
-  const tenantCity = job?.tenant?.city || "";
-  const tenantState = job?.tenant?.state || "";
-  const tenantPincode = job?.tenant?.pincode || "";
-  const tenantPhone = job?.tenant?.phone || "";
-  const tenantEmail = job?.tenant?.email || "";
-  const tenantGstin = job?.tenant?.gstin || job?.tenant?.gstNumber || paymentConfig?.gstNumber || "";
-  const tenantLogoUrl = job?.tenant?.logoUrl || (APP_CONFIG as any).logo || null;
-  const tenantSignatureUrl = job?.tenant?.signatureUrl || job?.tenant?.authorizedSignatureUrl || null;
-  const termsAndConditions = job?.tenant?.termsAndConditions || null;
-
-  // Customer Details
-  const customerName = job?.customerName || "Customer";
-  const customerMobile = job?.customerMobile || "";
-  const customerAddress = job?.customerAddress || job?.address || "";
-  const customerCity = job?.customerCity || "";
-  const customerState = job?.customerState || "";
-  const customerPincode = job?.customerPincode || "";
-  const customerGstin = job?.customerGstin || "";
-
-  // Service Line Information
-  const service = job?.service || "General Service";
-  const category = job?.category || "Service";
-
-  const billableServiceCharge = job?.paymentServiceChargeWaived ? 0 : serviceCharge;
-  const billableLabourCharge = job?.paymentLabourChargeWaived ? 0 : labourCharge;
-  const billableSpareParts = sparePartsAmount > 0 ? sparePartsAmount : 0;
-  const billableAdditional = additionalCharge > 0 ? additionalCharge : 0;
-  const billableDiscount = discount > 0 ? discount : 0;
-
-  const calculatedGst = gstAmount > 0
-    ? gstAmount
-    : (gstPercent > 0 && billableServiceCharge > 0)
-      ? Math.round(((billableServiceCharge * gstPercent) / 100) * 100) / 100
-      : 0;
-
-  const calculatedSubtotal = baseAmount > 0
-    ? baseAmount
-    : billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
-
-  const calculatedTotal = totalAmount > 0
-    ? totalAmount
-    : Math.max(0, calculatedSubtotal + calculatedGst);
-
-  const amountInWords = numberToIndianWords(calculatedTotal);
-
-  const chargeableParts = job?.spareParts?.filter((p) => p.coverageType === "OUT_OF_WARRANTY") ?? [];
-  const warrantyParts = job?.spareParts?.filter((p) => p.coverageType === "WARRANTY") ?? [];
-
-  const totalQuantitySum = 1 + (job?.spareParts ?? []).reduce((acc, p) => acc + (p.quantity || 1), 0) + (labourCharge > 0 ? 1 : 0) + (billableAdditional > 0 ? 1 : 0);
-
-  const showAlert = (title: string, message: string, type: "success" | "error" | "warning" = "success") => {
-    setAlertTitle(title);
-    setAlertMessage(message);
-    setAlertType(type);
-    setAlertVisible(true);
+  // Formatting helpers
+  const formatDate = (dateStr?: string | null) => {
+    if (!dateStr) return "—";
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      const day = String(d.getDate()).padStart(2, "0");
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const year = d.getFullYear();
+      return `${day}-${month}-${year}`;
+    } catch {
+      return dateStr;
+    }
   };
 
-  const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatTime = (dateStr?: string | null) => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return "";
+      let hours = d.getHours();
+      const minutes = String(d.getMinutes()).padStart(2, "0");
+      const ampm = hours >= 12 ? "PM" : "AM";
+      hours = hours % 12 || 12;
+      return `${hours}:${minutes} ${ampm}`;
+    } catch {
+      return "";
+    }
+  };
 
-  const generatePDF = async () => {
-    let itemIdx = 1;
-    let tableRowsHtml = "";
+  const fmt = (val: number | undefined | null) => {
+    const num = Number(val ?? 0);
+    return `₹ ${num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
 
-    // 1. Service Row
-    if (serviceCharge > 0 || job?.paymentServiceChargeWaived) {
-      tableRowsHtml += `
+  // Compile full API invoice details (Phase 2, 3, 4, 5, 8: Dynamic & Zero Hardcoding)
+  const invoiceData = useMemo(() => {
+    const invDetails = job?.invoiceDetails;
+    const rawCompany =
+      paramCompany ||
+      (paramInvoice as any)?.company ||
+      (job as any)?.company ||
+      (job as any)?.rawInvoice?.company ||
+      (job as any)?.invoice?.company ||
+      (job as any)?.ticket?.company ||
+      invDetails?.company ||
+      job?.tenant ||
+      {};
+
+    const company = {
+      companyName:
+        rawCompany.companyName ||
+        rawCompany.name ||
+        invDetails?.company?.companyName ||
+        job?.tenant?.companyName ||
+        tenantInfo?.companyName ||
+        APP_CONFIG.appName,
+      address:
+        rawCompany.address ||
+        invDetails?.company?.address ||
+        job?.tenant?.address ||
+        tenantInfo?.address ||
+        "",
+      city:
+        rawCompany.city ||
+        invDetails?.company?.city ||
+        job?.tenant?.city ||
+        tenantInfo?.city ||
+        "",
+      state:
+        rawCompany.state ||
+        invDetails?.company?.state ||
+        job?.tenant?.state ||
+        tenantInfo?.state ||
+        "",
+      pincode:
+        rawCompany.pincode ||
+        invDetails?.company?.pincode ||
+        job?.tenant?.pincode ||
+        "",
+      phone:
+        rawCompany.phone ||
+        rawCompany.mobile ||
+        invDetails?.company?.phone ||
+        job?.tenant?.phone ||
+        tenantInfo?.phone ||
+        "",
+      email:
+        rawCompany.email ||
+        invDetails?.company?.email ||
+        job?.tenant?.email ||
+        "",
+      gstNumber:
+        rawCompany.gstNumber ||
+        rawCompany.gstin ||
+        invDetails?.company?.gstNumber ||
+        job?.tenant?.gstNumber ||
+        job?.tenant?.gstin ||
+        paymentConfig?.gstNumber ||
+        tenantInfo?.gstNumber ||
+        "",
+      logoUrl:
+        rawCompany.logoUrl ||
+        rawCompany.logo ||
+        invDetails?.company?.logoUrl ||
+        job?.tenant?.logoUrl ||
+        tenantInfo?.logoUrl ||
+        null,
+      sealUrl:
+        rawCompany.sealUrl ||
+        rawCompany.companySealUrl ||
+        invDetails?.company?.sealUrl ||
+        invDetails?.authorization?.sealUrl ||
+        (job as any)?.company?.sealUrl ||
+        (job as any)?.sealUrl ||
+        job?.tenant?.sealUrl ||
+        tenantInfo?.sealUrl ||
+        null,
+    };
+
+    const customer = {
+      customerName: invDetails?.customer?.customerName || job?.customerName || "—",
+      customerAddress: invDetails?.customer?.customerAddress || job?.address || job?.customerAddress || "",
+      customerCity: invDetails?.customer?.customerCity || job?.customerCity || "",
+      customerState: invDetails?.customer?.customerState || job?.customerState || "",
+      customerPincode: invDetails?.customer?.customerPincode || job?.customerPincode || "",
+      customerPhone: invDetails?.customer?.customerPhone || job?.customerMobile || job?.customerAlternatePhone || "",
+      customerEmail: invDetails?.customer?.customerEmail || job?.customerEmail || "",
+      customerGstin: invDetails?.customer?.customerGstin || job?.customerGstin || "",
+    };
+
+    const invoiceNumberVal =
+      invDetails?.invoice?.invoiceNumber ||
+      invoiceNo ||
+      job?.invoiceNo ||
+      (job?.ticketNo ? `INV-${job.ticketNo}` : "—");
+
+    const dateVal =
+      invDetails?.invoice?.invoiceDate ||
+      (job?.invoiceGeneratedAt ? formatDate(job.invoiceGeneratedAt) : formatDate(invoiceGeneratedAt || new Date().toISOString()));
+
+    const timeVal =
+      invDetails?.invoice?.invoiceTime ||
+      (job?.invoiceGeneratedAt ? formatTime(job.invoiceGeneratedAt) : formatTime(invoiceGeneratedAt || new Date().toISOString()));
+
+    const invoiceMeta = {
+      invoiceId: invDetails?.invoice?.invoiceId || job?.rawInvoice?.id || "",
+      invoiceNumber: invoiceNumberVal,
+      prefix: invDetails?.invoice?.prefix || "INV",
+      invoiceDate: dateVal,
+      invoiceTime: timeVal,
+      billingType: invDetails?.invoice?.billingType || job?.rawInvoice?.billingType || null,
+      placeOfSupply: invDetails?.invoice?.placeOfSupply || company.state || company.city || "",
+    };
+
+    // Dynamic items
+    let items = invDetails?.items;
+    if (!items || items.length === 0) {
+      const fallbackItems = [];
+      const serviceVal = Number(job?.invoiceServiceCharge ?? job?.invoiceSubtotal ?? initialAmount ?? 0);
+      if (serviceVal > 0 || !job?.spareParts || job.spareParts.length === 0) {
+        fallbackItems.push({
+          itemName: (job?.service || "SERVICE").toUpperCase(),
+          description: job?.scheduledDate ? `(ON ${job.scheduledDate})` : "",
+          quantity: 1,
+          unit: "Nos",
+          unitPrice: serviceVal,
+          amount: serviceVal,
+        });
+      }
+      if (Number(job?.invoiceLabourCharge ?? 0) > 0) {
+        fallbackItems.push({
+          itemName: "LABOUR CHARGES",
+          description: "",
+          quantity: 1,
+          unit: "Nos",
+          unitPrice: Number(job?.invoiceLabourCharge),
+          amount: Number(job?.invoiceLabourCharge),
+        });
+      }
+      if (job?.spareParts && job.spareParts.length > 0) {
+        for (const sp of job.spareParts) {
+          const isWarranty = sp.coverageType === "WARRANTY";
+          fallbackItems.push({
+            itemName: sp.name.toUpperCase(),
+            description: isWarranty ? "(Covered under warranty)" : "",
+            quantity: sp.quantity,
+            unit: sp.unitOfMeasure || "Nos",
+            unitPrice: sp.unitPrice,
+            amount: isWarranty ? 0 : sp.quantity * sp.unitPrice,
+          });
+        }
+      }
+      if (Number(job?.invoiceAdditionalCharge ?? 0) > 0) {
+        fallbackItems.push({
+          itemName: "ADDITIONAL CHARGES",
+          description: "",
+          quantity: 1,
+          unit: "Nos",
+          unitPrice: Number(job?.invoiceAdditionalCharge),
+          amount: Number(job?.invoiceAdditionalCharge),
+        });
+      }
+      items = fallbackItems;
+    }
+
+    // Billing summary
+    const subtotal = Number(invDetails?.billing?.subtotal ?? job?.invoiceSubtotal ?? invoiceSubtotal ?? initialAmount ?? 0);
+    const discount = Number(invDetails?.billing?.discount ?? job?.invoiceDiscount ?? 0);
+    const gstPercent = Number(invDetails?.billing?.gstPercent ?? job?.invoiceGstPercent ?? invoiceGstPercent ?? 0);
+    const gstAmount = Number(invDetails?.billing?.gstAmount ?? job?.invoiceGstAmount ?? invoiceGstAmount ?? 0);
+    const total = Number(invDetails?.billing?.total ?? job?.invoiceTotal ?? invoiceTotal ?? initialAmount ?? 0);
+    const receivedAmount = Number(invDetails?.billing?.receivedAmount ?? (job?.paymentMethod === "CREDIT" ? 0 : total));
+    const balanceAmount = Number(invDetails?.billing?.balanceAmount ?? (job?.paymentMethod === "CREDIT" ? total : 0));
+    const amountInWords = invDetails?.billing?.amountInWords || numberToIndianWords(total);
+
+    const billing = {
+      subtotal,
+      discount,
+      gstPercent,
+      gstAmount,
+      total,
+      receivedAmount,
+      balanceAmount,
+      amountInWords,
+    };
+
+    const termsAndConditions =
+      invDetails?.termsAndConditions && invDetails.termsAndConditions.length > 0
+        ? invDetails.termsAndConditions
+        : [gstPercent > 0 ? "* Including GST." : "* GST Not Applicable.", "* Payment 100% Advance."];
+
+    const authorization = {
+      companyName: invDetails?.authorization?.companyName || company.companyName,
+      sealUrl: company.sealUrl || invDetails?.authorization?.sealUrl || null,
+      signatureUrl: invDetails?.authorization?.signatureUrl || null,
+      authorizedSignatoryName: invDetails?.authorization?.authorizedSignatoryName || "Authorized Signatory",
+    };
+
+    // Calculate totals for items table
+    const totalItemQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const totalItemAmount = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    return {
+      company,
+      customer,
+      invoiceMeta,
+      items,
+      billing,
+      termsAndConditions,
+      authorization,
+      totalItemQty,
+      totalItemAmount,
+    };
+  }, [job, invoiceNo, invoiceSubtotal, invoiceGstAmount, invoiceGstPercent, invoiceTotal, initialAmount, invoiceGeneratedAt, tenantInfo, paymentConfig]);
+
+  /**
+   * Generates the clean, exact SERVICE BILL PDF HTML string matching the reference PDF design.
+   */
+  const generateServiceBillHtml = (): string => {
+    const {
+      company,
+      customer,
+      invoiceMeta,
+      items,
+      billing,
+      termsAndConditions,
+      authorization,
+      totalItemQty,
+      totalItemAmount,
+    } = invoiceData;
+
+    const itemsRowsHtml = items
+      .map(
+        (item, idx) => `
         <tr>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${itemIdx++}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; font-size: 11px;">
-            <strong>${service}</strong>
-            <div style="font-size: 10px; color: #4b5563;">${category}${job?.paymentServiceChargeWaived ? " (Covered by AMC)" : ""}</div>
+          <td style="width: 32px; text-align: center;">${idx + 1}</td>
+          <td>
+            <div style="font-weight: 700; text-transform: uppercase;">${item.itemName}</div>
+            ${item.description ? `<div style="font-size: 10px; color: #6b7280; margin-top: 1px;">${item.description}</div>` : ""}
           </td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">1</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">Job</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px;">${job?.paymentServiceChargeWaived ? "FREE" : fmt(serviceCharge)}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px; font-weight: bold;">${job?.paymentServiceChargeWaived ? "FREE" : fmt(billableServiceCharge)}</td>
+          <td style="width: 60px; text-align: center;">${item.quantity}</td>
+          <td style="width: 60px; text-align: center;">${item.unit}</td>
+          <td style="width: 100px; text-align: right;">Rs ${Number(item.unitPrice).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="width: 100px; text-align: right; font-weight: 600;">Rs ${Number(item.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
         </tr>
-      `;
-    }
+      `
+      )
+      .join("");
 
-    // 2. Spare Parts Rows
-    chargeableParts.forEach((p) => {
-      const lineTotal = p.unitPrice * p.quantity;
-      tableRowsHtml += `
-        <tr>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${itemIdx++}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; font-size: 11px;">${p.name}</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${p.quantity}</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${p.unitOfMeasure || "Nos"}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px;">${fmt(p.unitPrice)}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px; font-weight: bold;">${fmt(lineTotal)}</td>
-        </tr>
-      `;
-    });
+    const termsHtml = termsAndConditions
+      .map((term) => `<div style="font-size: 11px; color: #374151; margin-top: 2px;">${term}</div>`)
+      .join("");
 
-    warrantyParts.forEach((p) => {
-      tableRowsHtml += `
-        <tr>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${itemIdx++}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; font-size: 11px;">
-            ${p.name} <span style="color: #16a34a; font-size: 10px;">(Warranty Covered)</span>
-          </td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${p.quantity}</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${p.unitOfMeasure || "Nos"}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px; text-decoration: line-through; color: #9ca3af;">${fmt(p.unitPrice)}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px; font-weight: bold; color: #16a34a;">FREE</td>
-        </tr>
-      `;
-    });
-
-    // 3. Labour Charge Row
-    if (labourCharge > 0 || job?.paymentLabourChargeWaived) {
-      tableRowsHtml += `
-        <tr>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${itemIdx++}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; font-size: 11px;">Labour Charge</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">1</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">Job</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px;">${job?.paymentLabourChargeWaived ? "FREE" : fmt(labourCharge)}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px; font-weight: bold;">${job?.paymentLabourChargeWaived ? "FREE" : fmt(billableLabourCharge)}</td>
-        </tr>
-      `;
-    }
-
-    // 4. Additional Charges
-    if (billableAdditional > 0) {
-      tableRowsHtml += `
-        <tr>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">${itemIdx++}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; font-size: 11px;">Additional Charges</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">1</td>
-          <td style="border: 1px solid #475569; padding: 6px 8px; text-align: center; font-size: 11px;">Job</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px;">${fmt(billableAdditional)}</td>
-          <td style="border: 1px solid #475569; padding: 6px 10px; text-align: right; font-size: 11px; font-weight: bold;">${fmt(billableAdditional)}</td>
-        </tr>
-      `;
-    }
-
-    const html = `
+    return `
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Service Bill #${invoiceNo}</title>
+        <title>Service Bill #${invoiceMeta.invoiceNumber}</title>
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
           body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: #ffffff;
+            padding: 36px 44px;
             color: #111827;
-            background-color: #ffffff;
-            padding: 30px 40px;
-            font-size: 11px;
             line-height: 1.4;
-          }
-          .invoice-paper {
-            max-width: 800px;
-            margin: 0 auto;
-          }
-          .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 8px;
-          }
-          .company-info {
-            max-width: 65%;
-          }
-          .company-name {
-            font-size: 18px;
-            font-weight: 800;
-            color: #111827;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 3px;
-          }
-          .company-text {
-            font-size: 11px;
-            color: #374151;
-            margin-top: 1px;
-          }
-          .company-logo {
-            max-height: 60px;
-            max-width: 140px;
-            object-fit: contain;
-          }
-          .logo-box {
-            width: 60px;
-            height: 60px;
-            border: 1.5px solid #111827;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            font-weight: 800;
-            color: #111827;
-          }
-          .divider {
-            border: none;
-            border-top: 1.5px solid #111827;
-            margin: 10px 0;
-          }
-          .thin-divider {
-            border: none;
-            border-top: 1px solid #cbd5e1;
-            margin: 8px 0;
-          }
-          .title-center {
-            text-align: center;
-            font-size: 15px;
-            font-weight: 800;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            padding: 4px 0;
-            margin-bottom: 10px;
-            border-top: 1.5px solid #111827;
-            border-bottom: 1.5px solid #111827;
-          }
-          .meta-section {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 12px;
-          }
-          .meta-col {
-            width: 48%;
-          }
-          .meta-title {
-            font-size: 11px;
-            font-weight: 800;
-            text-transform: uppercase;
-            margin-bottom: 4px;
-            color: #111827;
-          }
-          .meta-line {
-            font-size: 11px;
-            color: #1f2937;
-            margin-bottom: 2px;
-          }
-          .meta-table-right {
-            width: 100%;
-          }
-          .meta-table-right td {
-            padding: 1.5px 0;
-            font-size: 11px;
-          }
-          .table-container {
-            width: 100%;
-            border-collapse: collapse;
-            border: 1px solid #475569;
-            margin-top: 6px;
-            margin-bottom: 12px;
-          }
-          .table-container th {
-            background-color: #1e293b;
-            color: #ffffff;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 6px 8px;
-            border: 1px solid #475569;
-            text-transform: capitalize;
-          }
-          .table-container td {
-            border: 1px solid #475569;
-          }
-          .total-row-table {
-            background-color: #f9fafb;
-            font-weight: bold;
-          }
-          .total-row-table td {
-            padding: 6px 10px;
-            border: 1px solid #475569;
-            font-size: 11px;
-          }
-          .bottom-section {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 10px;
-          }
-          .bottom-left {
-            width: 54%;
-            padding-right: 20px;
-          }
-          .bottom-right {
-            width: 44%;
-          }
-          .amount-words-title {
-            font-weight: 800;
-            font-size: 11px;
-            margin-bottom: 2px;
-          }
-          .amount-words-val {
-            font-style: italic;
-            font-size: 11px;
-            color: #1f2937;
-            margin-bottom: 16px;
-          }
-          .terms-title {
-            font-weight: 800;
-            font-size: 11px;
-            margin-bottom: 4px;
-          }
-          .terms-list {
-            font-size: 10px;
-            color: #4b5563;
-            line-height: 1.4;
-            padding-left: 14px;
-          }
-          .totals-table {
-            width: 100%;
-            border-collapse: collapse;
-          }
-          .totals-table td {
-            padding: 3px 0;
-            font-size: 11px;
-          }
-          .totals-table .val-col {
-            text-align: right;
-            font-weight: 600;
-          }
-          .totals-table .grand-row td {
             font-size: 12px;
-            font-weight: 800;
-            border-top: 1.5px solid #111827;
-            border-bottom: 1.5px solid #111827;
-            padding: 5px 0;
           }
-          .signatory-container {
-            margin-top: 24px;
-            text-align: right;
-          }
-          .sign-for {
-            font-weight: 700;
-            font-size: 11px;
-            margin-bottom: 30px;
-          }
-          .sign-line {
-            font-size: 11px;
-            font-weight: 700;
-            display: inline-block;
-            border-top: 1px solid #111827;
-            padding-top: 3px;
-            min-width: 140px;
-            text-align: center;
-          }
+          .bill-box { max-width: 720px; margin: auto; }
+          .header-row { display: flex; justify-content: space-between; align-items: center; }
+          .company-col { flex: 1; padding-right: 16px; }
+          .company-title { font-size: 16px; font-weight: 800; color: #111827; text-transform: uppercase; letter-spacing: 0.5px; }
+          .company-meta { font-size: 11px; color: #374151; margin-top: 2px; }
+          .logo-col { width: 140px; text-align: right; display: flex; justify-content: flex-end; align-items: center; }
+          .header-logo { max-height: 65px; max-width: 140px; object-fit: contain; }
+          .green-line { height: 1.5px; background: #15803d; margin: 12px 0 14px 0; width: 100%; }
+          .bill-title { font-size: 18px; font-weight: 800; color: #15803d; text-align: center; margin-bottom: 18px; letter-spacing: 0.5px; }
+          
+          .two-col { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+          .col-left { width: 55%; }
+          .col-right { width: 42%; text-align: right; }
+          .section-title { font-size: 12px; font-weight: 700; color: #111827; margin-bottom: 4px; }
+          .customer-name { font-size: 13px; font-weight: 700; color: #111827; text-transform: uppercase; }
+          .cust-meta { font-size: 11px; color: #374151; margin-top: 2px; }
+          .detail-row { font-size: 11px; color: #374151; margin-top: 3px; }
+          .detail-label { color: #6b7280; font-weight: 500; }
+          .detail-val { font-weight: 700; color: #111827; }
+
+          table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+          th { background: #15803d; color: #ffffff; font-weight: 700; font-size: 11px; padding: 7px 8px; text-align: left; }
+          td { padding: 8px 8px; font-size: 11px; color: #111827; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+          .total-row td { border-top: 1.5px solid #111827; border-bottom: 1.5px solid #111827; font-weight: 700; font-size: 11.5px; padding: 8px 8px; }
+
+          .bottom-section { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 10px; }
+          .bottom-left { width: 52%; }
+          .bottom-right { width: 44%; }
+          .bold-title { font-size: 11.5px; font-weight: 700; color: #111827; margin-bottom: 4px; }
+          .words-text { font-size: 11.5px; color: #374151; margin-bottom: 16px; }
+          
+          .summary-row { display: flex; justify-content: space-between; font-size: 11.5px; color: #374151; padding: 3px 0; }
+          .total-banner { background: #15803d; color: #ffffff; display: flex; justify-content: space-between; font-weight: 700; font-size: 12px; padding: 6px 8px; margin: 4px 0; }
+          .summary-val { font-weight: 600; color: #111827; }
+
+          .auth-box { margin-top: 22px; text-align: right; }
+          .auth-for { font-size: 11.5px; font-weight: 700; color: #111827; }
+          .seal-box { height: 55px; margin: 4px 0; display: flex; justify-content: flex-end; align-items: center; }
+          .seal-space { height: 45px; }
+          .seal-img { max-height: 50px; max-width: 100px; object-fit: contain; }
+          .auth-signatory { font-size: 11.5px; font-weight: 700; color: #111827; }
         </style>
       </head>
       <body>
-        <div class="invoice-paper">
-          <!-- 1. Header -->
+        <div class="bill-box">
+          <!-- 1. TOP HEADER: Company Details (Left) & Company Logo (Right) -->
           <div class="header-row">
-            <div class="company-info">
-              <div class="company-name">${tenantName}</div>
-              ${tenantAddress ? `<div class="company-text">${tenantAddress}</div>` : ""}
-              ${(tenantCity || tenantState) ? `<div class="company-text">${[tenantCity, tenantState ? (tenantPincode ? `${tenantState} - ${tenantPincode}` : tenantState) : tenantPincode].filter(Boolean).join(", ")}</div>` : ""}
-              ${tenantPhone ? `<div class="company-text">Phone: ${tenantPhone}</div>` : ""}
-              ${tenantGstin ? `<div class="company-text">GSTIN: ${tenantGstin}</div>` : ""}
-              ${tenantState ? `<div class="company-text">State: ${tenantState}</div>` : ""}
+            <div class="company-col">
+              <div class="company-title">${company.companyName}</div>
+              ${company.address ? `<div class="company-meta">${company.address}</div>` : ""}
+              ${company.city || company.pincode ? `<div class="company-meta">${[company.city, company.pincode].filter(Boolean).join(" - ")}</div>` : ""}
+              ${company.phone ? `<div class="company-meta">Phone: ${company.phone}</div>` : ""}
+              ${company.state ? `<div class="company-meta">State: ${company.state}</div>` : ""}
+              ${company.gstNumber ? `<div class="company-meta">GSTIN: ${company.gstNumber}</div>` : ""}
             </div>
-            <div>
-              ${tenantLogoUrl ? `<img src="${tenantLogoUrl}" class="company-logo" alt="Logo" />` : `<div class="logo-box">${tenantName.substring(0, 2).toUpperCase()}</div>`}
+            ${company.logoUrl ? `
+              <div class="logo-col">
+                <img src="${company.logoUrl}" class="header-logo" alt="Logo" />
+              </div>
+            ` : ""}
+          </div>
+
+          <!-- Thin Green Divider Line -->
+          <div class="green-line"></div>
+
+          <!-- 2. CENTERED SERVICE BILL TITLE -->
+          <div class="bill-title">SERVICE BILL</div>
+
+          <!-- 3. TWO-COLUMN: Bill To (Left) & Invoice Details (Right) -->
+          <div class="two-col">
+            <div class="col-left">
+              <div class="section-title">Bill To</div>
+              <div class="customer-name">${customer.customerName}</div>
+              ${customer.customerAddress ? `<div class="cust-meta">${customer.customerAddress}</div>` : ""}
+              ${customer.customerCity || customer.customerPincode ? `<div class="cust-meta">${[customer.customerCity, customer.customerPincode].filter(Boolean).join(", ")}</div>` : ""}
+              ${customer.customerPhone ? `<div class="cust-meta">Contact: ${customer.customerPhone}</div>` : ""}
+              ${customer.customerState ? `<div class="cust-meta">State: ${customer.customerState}</div>` : ""}
+              ${customer.customerGstin ? `<div class="cust-meta">GSTIN: ${customer.customerGstin}</div>` : ""}
+            </div>
+
+            <div class="col-right">
+              <div class="section-title">Invoice Details</div>
+              <div class="detail-row"><span class="detail-label">Invoice No.: </span><span class="detail-val">${invoiceMeta.invoiceNumber}</span></div>
+              <div class="detail-row"><span class="detail-label">Date: </span><span class="detail-val">${invoiceMeta.invoiceDate}</span></div>
+              ${invoiceMeta.invoiceTime ? `<div class="detail-row"><span class="detail-label">Time: </span><span class="detail-val">${invoiceMeta.invoiceTime}</span></div>` : ""}
+              ${invoiceMeta.placeOfSupply ? `<div class="detail-row"><span class="detail-label">Place of Supply: </span><span class="detail-val">${invoiceMeta.placeOfSupply}</span></div>` : ""}
             </div>
           </div>
 
-          <!-- 2. SERVICE BILL Title -->
-          <div class="title-center">SERVICE BILL</div>
-
-          <!-- 3. Bill To & Invoice Details -->
-          <div class="meta-section">
-            <div class="meta-col">
-              <div class="meta-title">Bill To:</div>
-              <div class="meta-line" style="font-weight: 700;">${customerName}</div>
-              ${customerAddress ? `<div class="meta-line">${customerAddress}</div>` : ""}
-              ${(customerCity || customerState) ? `<div class="meta-line">${[customerCity, customerState ? (customerPincode ? `${customerState} - ${customerPincode}` : customerState) : customerPincode].filter(Boolean).join(", ")}</div>` : ""}
-              ${customerMobile ? `<div class="meta-line">Phone: ${customerMobile}</div>` : ""}
-              ${customerState ? `<div class="meta-line">State: ${customerState}</div>` : ""}
-              ${customerGstin ? `<div class="meta-line">GSTIN: ${customerGstin}</div>` : ""}
-            </div>
-
-            <div class="meta-col">
-              <div class="meta-title">Invoice Details:</div>
-              <table class="meta-table-right">
-                <tr>
-                  <td style="color: #4b5563; width: 110px;">Invoice No.</td>
-                  <td style="font-weight: 700;">: #${invoiceNo}</td>
-                </tr>
-                <tr>
-                  <td style="color: #4b5563;">Date</td>
-                  <td>: ${invoiceDate}</td>
-                </tr>
-                ${invoiceTime ? `
-                <tr>
-                  <td style="color: #4b5563;">Time</td>
-                  <td>: ${invoiceTime}</td>
-                </tr>` : ""}
-                <tr>
-                  <td style="color: #4b5563;">Place of Supply</td>
-                  <td>: ${customerState || tenantState || "—"}</td>
-                </tr>
-                <tr>
-                  <td style="color: #4b5563;">Payment Method</td>
-                  <td>: ${paymentMethod}</td>
-                </tr>
-                <tr>
-                  <td style="color: #4b5563;">Payment Status</td>
-                  <td style="font-weight: 700; color: #16a34a;">: ${paymentStatus}</td>
-                </tr>
-              </table>
-            </div>
-          </div>
-
-          <!-- 4. Item Table -->
-          <table class="table-container">
+          <!-- 4. ITEM TABLE -->
+          <table>
             <thead>
               <tr>
-                <th style="width: 35px; text-align: center;">#</th>
-                <th style="text-align: left;">Item name</th>
-                <th style="width: 65px; text-align: center;">Quantity</th>
-                <th style="width: 55px; text-align: center;">Unit</th>
-                <th style="width: 100px; text-align: right;">Price / Unit</th>
-                <th style="width: 110px; text-align: right;">Amount</th>
+                <th style="width: 32px; text-align: center;">#</th>
+                <th>Item name</th>
+                <th style="width: 60px; text-align: center;">Quantity</th>
+                <th style="width: 60px; text-align: center;">Unit</th>
+                <th style="width: 100px; text-align: right;">Price/ Unit</th>
+                <th style="width: 100px; text-align: right;">Amount</th>
               </tr>
             </thead>
             <tbody>
-              ${tableRowsHtml}
-              <tr class="total-row-table">
-                <td colspan="2" style="text-align: right;">Total</td>
-                <td style="text-align: center;">${totalQuantitySum}</td>
+              ${itemsRowsHtml}
+              <tr class="total-row">
+                <td style="text-align: center;"></td>
+                <td>Total</td>
+                <td style="text-align: center;">${totalItemQty}</td>
                 <td></td>
                 <td></td>
-                <td style="text-align: right;">${fmt(calculatedSubtotal)}</td>
+                <td style="text-align: right;">Rs ${totalItemAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               </tr>
             </tbody>
           </table>
 
-          <!-- 5. Bottom Section: Words & Terms on Left, Totals & Signature on Right -->
+          <!-- 5. LOWER SECTION: Words & Terms (Left) | Billing Summary (Right) -->
           <div class="bottom-section">
             <div class="bottom-left">
-              <div class="amount-words-title">Invoice Amount in Words</div>
-              <div class="amount-words-val">${amountInWords}</div>
+              <div class="bold-title">Invoice Amount In Words</div>
+              <div class="words-text">${billing.amountInWords}</div>
 
-              <div class="terms-title">Terms and Conditions</div>
-              <ul class="terms-list">
-                ${termsAndConditions ? `<li>${termsAndConditions}</li>` : `
-                <li>All services carried out by certified service personnel.</li>
-                <li>Warranty on spare parts is covered as per manufacturer policy.</li>
-                <li>Please retain this service bill for warranty verification.</li>
-                `}
-              </ul>
+              <div class="bold-title">Terms And Conditions</div>
+              ${termsHtml}
             </div>
 
             <div class="bottom-right">
-              <table class="totals-table">
-                <tr>
-                  <td>Sub Total</td>
-                  <td class="val-col">${fmt(calculatedSubtotal)}</td>
-                </tr>
-                ${billableDiscount > 0 ? `
-                <tr>
-                  <td style="color: #16a34a;">Discount</td>
-                  <td class="val-col" style="color: #16a34a;">-${fmt(billableDiscount)}</td>
-                </tr>` : ""}
-                ${calculatedGst > 0 ? `
-                <tr>
-                  <td>GST (${gstPercent}%)</td>
-                  <td class="val-col">${fmt(calculatedGst)}</td>
-                </tr>` : ""}
-                <tr class="grand-row">
-                  <td>Total</td>
-                  <td class="val-col">${fmt(calculatedTotal)}</td>
-                </tr>
-                <tr>
-                  <td style="color: #4b5563; padding-top: 4px;">Received</td>
-                  <td class="val-col" style="padding-top: 4px;">${fmt(calculatedTotal)}</td>
-                </tr>
-                <tr>
-                  <td style="color: #4b5563;">Balance</td>
-                  <td class="val-col">₹0.00</td>
-                </tr>
-              </table>
+              <div class="summary-row">
+                <span class="summary-label">Sub Total</span>
+                <span class="summary-val">Rs ${billing.subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+              ${billing.discount > 0 ? `
+                <div class="summary-row">
+                  <span class="summary-label">Discount</span>
+                  <span class="summary-val">-Rs ${billing.discount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              ` : ""}
+              ${billing.gstAmount > 0 ? `
+                <div class="summary-row">
+                  <span class="summary-label">GST (${billing.gstPercent}%)</span>
+                  <span class="summary-val">Rs ${billing.gstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              ` : ""}
+              <div class="total-banner">
+                <span>Total</span>
+                <span>Rs ${billing.total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">Received</span>
+                <span class="summary-val">Rs ${billing.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">Balance</span>
+                <span class="summary-val">Rs ${billing.balanceAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
 
-              <div class="signatory-container">
-                <div class="sign-for">For: ${tenantName}</div>
-                ${tenantSignatureUrl ? `
-                  <div style="margin-bottom: 4px;">
-                    <img src="${tenantSignatureUrl}" style="max-height: 40px; max-width: 120px; object-fit: contain;" alt="Signature" />
+              <!-- AUTHORIZATION -->
+              <div class="auth-box">
+                <div class="auth-for">For: ${company.companyName}</div>
+                ${company.sealUrl ? `
+                  <div class="seal-box">
+                    <img src="${company.sealUrl}" class="seal-img" alt="Seal" />
                   </div>
-                ` : `
-                  <div style="height: 32px;"></div>
-                `}
-                <div class="sign-line">Authorized Signatory</div>
+                ` : `<div class="seal-space"></div>`}
+                <div class="auth-signatory">${authorization.authorizedSignatoryName}</div>
               </div>
             </div>
           </div>
@@ -616,340 +584,318 @@ export const InvoiceGenerateScreen = () => {
       </body>
       </html>
     `;
-
-    const { uri } = await Print.printToFileAsync({ html });
-    return uri;
   };
 
-  const handleShare = async () => {
-    try {
-      const uri = await generatePDF();
-      await Sharing.shareAsync(uri, {
-        mimeType: "application/pdf",
-        dialogTitle: `Share Service Bill #${invoiceNo}`,
-        UTI: "com.adobe.pdf",
-      });
-    } catch (err: any) {
-      showAlert("Share Failed", "We couldn't share the invoice details. Please try again.", "error");
-    }
-  };
-
+  /**
+   * Phase 9: Generates invoice PDF via expo-print and saves/opens it.
+   */
   const handleDownload = async () => {
     try {
       setDownloading(true);
-      const uri = await generatePDF();
-      if (Platform.OS === "ios") {
-        await Sharing.shareAsync(uri);
+      const html = generateServiceBillHtml();
+      const { uri } = await Print.printToFileAsync({ html });
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: "application/pdf",
+          dialogTitle: `Save Invoice #${invoiceData.invoiceMeta.invoiceNumber}`,
+          UTI: ".pdf",
+        });
       } else {
         await Print.printAsync({ uri });
       }
-      showAlert("Invoice Ready", `Service Bill PDF for #${invoiceNo} is ready.`, "success");
-    } catch (err: any) {
-      showAlert("Download Failed", "We couldn't download the invoice. Please try again.", "error");
+      showAlert("Invoice Ready", `Service Bill #${invoiceData.invoiceMeta.invoiceNumber} has been generated successfully.`, "success");
+    } catch {
+      showAlert("Download Failed", "We could not generate the invoice PDF. Please try again.", "error");
     } finally {
       setDownloading(false);
     }
   };
 
-  if (isLoading) {
+  /**
+   * Phase 10: Shares the exact same generated PDF via native sharing sheet.
+   */
+  const handleShare = async () => {
+    try {
+      setSharing(true);
+      const html = generateServiceBillHtml();
+      const { uri } = await Print.printToFileAsync({ html });
+
+      if (!(await Sharing.isAvailableAsync())) {
+        showAlert("Sharing Unavailable", "Sharing is not supported on this device.", "warning");
+        return;
+      }
+
+      await Sharing.shareAsync(uri, {
+        mimeType: "application/pdf",
+        dialogTitle: `Share Service Bill #${invoiceData.invoiceMeta.invoiceNumber}`,
+        UTI: "com.adobe.pdf",
+      });
+    } catch {
+      showAlert("Share Failed", "We could not share the invoice document. Please try again.", "error");
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  if (isJobLoading && !job) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <AppHeader title="Invoice Details" showBack onBackPress={handleBack} />
+        <AppHeader title="Service Bill" showBack onBackPress={handleBack} />
         <AppLoader message="Loading invoice..." />
       </View>
     );
   }
 
+  const {
+    company,
+    customer,
+    invoiceMeta,
+    items,
+    billing,
+    termsAndConditions,
+    authorization,
+    totalItemQty,
+    totalItemAmount,
+  } = invoiceData;
+
   return (
-    <View style={[styles.container, { backgroundColor: "#f3f4f6" }]}>
+    <View style={[styles.container, { backgroundColor: "#f1f5f9" }]}>
       <AppHeader
-        title="Job Invoice"
-        subtitle={ticketNo}
+        title="Service Bill"
+        subtitle={`#${invoiceMeta.invoiceNumber}`}
         showBack={true}
         onBackPress={handleBack}
       />
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Success Check Banner */}
-        <View style={styles.centerCol}>
-          <View style={[styles.iconCircle, { backgroundColor: `${theme.colors.success}15` }]}>
-            <CheckCircle2 size={40} color={theme.colors.success} />
-          </View>
-          <Text style={[styles.title, { color: "#111827" }]}>Payment & Job Closed</Text>
-          <Text style={[styles.subtitle, { color: "#6b7280" }]}>
-            The job has been completed. The official service bill has been generated.
-          </Text>
-        </View>
-
-        {/* ── AUTHENTIC PAPER SERVICE BILL SHEET PREVIEW ───────────────────────── */}
-        <View style={styles.paperSheet}>
-          {/* Header Row: Company Details on Left, Logo on Right */}
-          <View style={styles.sheetHeaderRow}>
-            <View style={styles.sheetCompanyInfo}>
-              <Text style={styles.sheetCompanyName}>{tenantName}</Text>
-              {tenantAddress ? <Text style={styles.sheetCompanyText}>{tenantAddress}</Text> : null}
-              {(tenantCity || tenantState) ? (
-                <Text style={styles.sheetCompanyText}>
-                  {[tenantCity, tenantState ? (tenantPincode ? `${tenantState} - ${tenantPincode}` : tenantState) : tenantPincode].filter(Boolean).join(", ")}
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* ========================================================
+            REQUIRED SERVICE BILL INVOICE CARD (MATCHING REFERENCE PDF)
+            ======================================================== */}
+        <View style={styles.billContainer}>
+          {/* 1. TOP HEADER: Company Details (LEFT) & Logo (RIGHT) */}
+          <View style={styles.headerRow}>
+            <View style={styles.companyCol}>
+              <Text style={styles.companyName}>{company.companyName}</Text>
+              {company.address ? <Text style={styles.companyMeta}>{company.address}</Text> : null}
+              {company.city || company.pincode ? (
+                <Text style={styles.companyMeta}>
+                  {[company.city, company.pincode].filter(Boolean).join(" - ")}
                 </Text>
               ) : null}
-              {tenantPhone ? <Text style={styles.sheetCompanyText}>Phone: {tenantPhone}</Text> : null}
-              {tenantGstin ? <Text style={styles.sheetCompanyText}>GSTIN: {tenantGstin}</Text> : null}
-              {tenantState ? <Text style={styles.sheetCompanyText}>State: {tenantState}</Text> : null}
+              {company.phone ? <Text style={styles.companyMeta}>Phone: {company.phone}</Text> : null}
+              {company.state ? <Text style={styles.companyMeta}>State: {company.state}</Text> : null}
+              {company.gstNumber ? <Text style={styles.companyMeta}>GSTIN: {company.gstNumber}</Text> : null}
             </View>
 
-            {tenantLogoUrl ? (
-              <Image source={{ uri: tenantLogoUrl }} style={styles.sheetLogo} resizeMode="contain" />
-            ) : (
-              <View style={styles.sheetLogoBox}>
-                <Text style={styles.sheetLogoText}>{tenantName.substring(0, 2).toUpperCase()}</Text>
+            {company.logoUrl ? (
+              <View style={styles.logoCol}>
+                <Image source={{ uri: company.logoUrl }} style={styles.companyLogo} resizeMode="contain" />
               </View>
-            )}
+            ) : null}
           </View>
 
-          {/* Centered Service Bill Title */}
-          <View style={styles.sheetTitleContainer}>
-            <Text style={styles.sheetTitleText}>SERVICE BILL</Text>
-          </View>
+          {/* Green Horizontal Divider */}
+          <View style={styles.greenDivider} />
 
-          {/* 2-Column Meta: Bill To (Left) & Invoice Details (Right) */}
-          <View style={styles.sheetMetaRow}>
+          {/* 2. CENTERED SERVICE BILL TITLE */}
+          <Text style={styles.serviceBillTitle}>SERVICE BILL</Text>
+
+          {/* 3. TWO-COLUMN: Bill To (LEFT) & Invoice Details (RIGHT) */}
+          <View style={styles.twoColRow}>
             {/* Bill To */}
-            <View style={styles.sheetMetaLeft}>
-              <Text style={styles.sheetMetaHeading}>Bill To:</Text>
-              <Text style={styles.sheetCustomerName}>{customerName}</Text>
-              {customerAddress ? <Text style={styles.sheetMetaLine}>{customerAddress}</Text> : null}
-              {(customerCity || customerState) ? (
-                <Text style={styles.sheetMetaLine}>
-                  {[customerCity, customerState ? (customerPincode ? `${customerState} - ${customerPincode}` : customerState) : customerPincode].filter(Boolean).join(", ")}
+            <View style={styles.colLeft}>
+              <Text style={styles.sectionHeading}>Bill To</Text>
+              <Text style={styles.customerName}>{customer.customerName}</Text>
+              {customer.customerAddress ? (
+                <Text style={styles.customerMeta}>{customer.customerAddress}</Text>
+              ) : null}
+              {customer.customerCity || customer.customerPincode ? (
+                <Text style={styles.customerMeta}>
+                  {[customer.customerCity, customer.customerPincode].filter(Boolean).join(", ")}
                 </Text>
               ) : null}
-              {customerMobile ? <Text style={styles.sheetMetaLine}>Phone: {customerMobile}</Text> : null}
-              {customerState ? <Text style={styles.sheetMetaLine}>State: {customerState}</Text> : null}
-              {customerGstin ? <Text style={styles.sheetMetaLine}>GSTIN: {customerGstin}</Text> : null}
+              {customer.customerPhone ? (
+                <Text style={styles.customerMeta}>Contact: {customer.customerPhone}</Text>
+              ) : null}
+              {customer.customerState ? (
+                <Text style={styles.customerMeta}>State: {customer.customerState}</Text>
+              ) : null}
+              {customer.customerGstin ? (
+                <Text style={styles.customerMeta}>GSTIN: {customer.customerGstin}</Text>
+              ) : null}
             </View>
 
             {/* Invoice Details */}
-            <View style={styles.sheetMetaRight}>
-              <Text style={styles.sheetMetaHeading}>Invoice Details:</Text>
-              <View style={styles.inlineMetaRow}>
-                <Text style={styles.inlineMetaLabel}>Invoice No.</Text>
-                <Text style={styles.inlineMetaVal}>: #{invoiceNo}</Text>
+            <View style={styles.colRight}>
+              <Text style={[styles.sectionHeading, { textAlign: "right" }]}>Invoice Details</Text>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Invoice No.: </Text>
+                <Text style={styles.metaValue}>{invoiceMeta.invoiceNumber}</Text>
               </View>
-              <View style={styles.inlineMetaRow}>
-                <Text style={styles.inlineMetaLabel}>Date</Text>
-                <Text style={styles.inlineMetaVal}>: {invoiceDate}</Text>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Date: </Text>
+                <Text style={styles.metaValue}>{invoiceMeta.invoiceDate}</Text>
               </View>
-              {invoiceTime ? (
-                <View style={styles.inlineMetaRow}>
-                  <Text style={styles.inlineMetaLabel}>Time</Text>
-                  <Text style={styles.inlineMetaVal}>: {invoiceTime}</Text>
+              {invoiceMeta.invoiceTime ? (
+                <View style={styles.metaRow}>
+                  <Text style={styles.metaLabel}>Time: </Text>
+                  <Text style={styles.metaValue}>{invoiceMeta.invoiceTime}</Text>
                 </View>
               ) : null}
-              <View style={styles.inlineMetaRow}>
-                <Text style={styles.inlineMetaLabel}>Place of Supply</Text>
-                <Text style={styles.inlineMetaVal}>: {customerState || tenantState || "—"}</Text>
-              </View>
-              <View style={styles.inlineMetaRow}>
-                <Text style={styles.inlineMetaLabel}>Payment Method</Text>
-                <Text style={styles.inlineMetaVal}>: {paymentMethod}</Text>
-              </View>
-              <View style={styles.inlineMetaRow}>
-                <Text style={styles.inlineMetaLabel}>Payment Status</Text>
-                <Text style={[styles.inlineMetaVal, { color: theme.colors.success, fontWeight: "700" }]}>: {paymentStatus}</Text>
-              </View>
+              {invoiceMeta.placeOfSupply ? (
+                <View style={styles.metaRow}>
+                  <Text style={styles.metaLabel}>Place of Supply: </Text>
+                  <Text style={styles.metaValue}>{invoiceMeta.placeOfSupply}</Text>
+                </View>
+              ) : null}
             </View>
           </View>
 
-          {/* ── Table Container ───────────────────────────────────────── */}
-          <View style={styles.sheetTable}>
-            {/* Header */}
-            <View style={styles.sheetTableHeader}>
-              <Text style={[styles.th, { width: 24, textAlign: "center" }]}>#</Text>
-              <Text style={[styles.th, { flex: 1 }]}>Item name</Text>
-              <Text style={[styles.th, { width: 34, textAlign: "center" }]}>Qty</Text>
-              <Text style={[styles.th, { width: 34, textAlign: "center" }]}>Unit</Text>
-              <Text style={[styles.th, { width: 62, textAlign: "right" }]}>Price/Unit</Text>
-              <Text style={[styles.th, { width: 70, textAlign: "right" }]}>Amount</Text>
+          {/* 4. ITEM TABLE */}
+          <View style={styles.tableContainer}>
+            {/* Table Header (Green Background, White Text) */}
+            <View style={styles.tableHeader}>
+              <Text style={[styles.thText, styles.colIdx]}>#</Text>
+              <Text style={[styles.thText, styles.colItem]}>Item name</Text>
+              <Text style={[styles.thText, styles.colQty]}>Quantity</Text>
+              <Text style={[styles.thText, styles.colUnit]}>Unit</Text>
+              <Text style={[styles.thText, styles.colPrice]}>Price/ Unit</Text>
+              <Text style={[styles.thText, styles.colAmount]}>Amount</Text>
             </View>
 
-            {/* Service Charge */}
-            {(serviceCharge > 0 || job?.paymentServiceChargeWaived) ? (
-              <View style={styles.sheetTableRow}>
-                <Text style={[styles.td, { width: 24, textAlign: "center" }]}>1</Text>
-                <View style={{ flex: 1, paddingRight: 4 }}>
-                  <Text style={styles.tableItemTitle}>{service}</Text>
-                  <Text style={styles.tableItemSub}>{category}{job?.paymentServiceChargeWaived ? " (AMC)" : ""}</Text>
+            {/* Table Rows */}
+            {items.map((item, index) => (
+              <View key={`item-${index}`} style={styles.tableRow}>
+                <Text style={[styles.tdText, styles.colIdx, { color: "#64748b" }]}>{index + 1}</Text>
+                <View style={styles.colItem}>
+                  <Text style={styles.itemNameText}>{item.itemName}</Text>
+                  {item.description ? (
+                    <Text style={styles.itemDescText}>{item.description}</Text>
+                  ) : null}
                 </View>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>1</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>Job</Text>
-                <Text style={[styles.td, { width: 62, textAlign: "right" }]}>
-                  {job?.paymentServiceChargeWaived ? "FREE" : fmt(serviceCharge)}
+                <Text style={[styles.tdText, styles.colQty]}>{item.quantity}</Text>
+                <Text style={[styles.tdText, styles.colUnit]}>{item.unit}</Text>
+                <Text style={[styles.tdText, styles.colPrice]}>{fmt(item.unitPrice)}</Text>
+                <Text style={[styles.tdText, styles.colAmount, { fontWeight: "700" }]}>
+                  {fmt(item.amount)}
                 </Text>
-                <Text style={[styles.td, { width: 70, textAlign: "right", fontWeight: "700" }]}>
-                  {job?.paymentServiceChargeWaived ? "FREE" : fmt(billableServiceCharge)}
-                </Text>
-              </View>
-            ) : null}
-
-            {/* Chargeable Spare Parts */}
-            {chargeableParts.map((p, idx) => (
-              <View key={`chargeable-${idx}`} style={styles.sheetTableRow}>
-                <Text style={[styles.td, { width: 24, textAlign: "center" }]}>{2 + idx}</Text>
-                <Text style={[styles.td, { flex: 1, paddingRight: 4 }]}>{p.name}</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>{p.quantity}</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>{p.unitOfMeasure || "Nos"}</Text>
-                <Text style={[styles.td, { width: 62, textAlign: "right" }]}>{fmt(p.unitPrice)}</Text>
-                <Text style={[styles.td, { width: 70, textAlign: "right", fontWeight: "700" }]}>{fmt(p.unitPrice * p.quantity)}</Text>
               </View>
             ))}
-
-            {/* Warranty Spare Parts */}
-            {warrantyParts.map((p, idx) => (
-              <View key={`warranty-${idx}`} style={styles.sheetTableRow}>
-                <Text style={[styles.td, { width: 24, textAlign: "center" }]}>{2 + chargeableParts.length + idx}</Text>
-                <View style={{ flex: 1, paddingRight: 4 }}>
-                  <Text style={styles.tableItemTitle}>{p.name}</Text>
-                  <Text style={[styles.tableItemSub, { color: theme.colors.success }]}>Warranty Covered</Text>
-                </View>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>{p.quantity}</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>{p.unitOfMeasure || "Nos"}</Text>
-                <Text style={[styles.td, { width: 62, textAlign: "right", textDecorationLine: "line-through", color: "#9ca3af" }]}>
-                  {fmt(p.unitPrice)}
-                </Text>
-                <Text style={[styles.td, { width: 70, textAlign: "right", fontWeight: "700", color: theme.colors.success }]}>FREE</Text>
-              </View>
-            ))}
-
-            {/* Labour Charge */}
-            {(labourCharge > 0 || job?.paymentLabourChargeWaived) ? (
-              <View style={styles.sheetTableRow}>
-                <Text style={[styles.td, { width: 24, textAlign: "center" }]}>{2 + (job?.spareParts?.length ?? 0)}</Text>
-                <Text style={[styles.td, { flex: 1, paddingRight: 4 }]}>Labour Charge</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>1</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>Job</Text>
-                <Text style={[styles.td, { width: 62, textAlign: "right" }]}>
-                  {job?.paymentLabourChargeWaived ? "FREE" : fmt(labourCharge)}
-                </Text>
-                <Text style={[styles.td, { width: 70, textAlign: "right", fontWeight: "700" }]}>
-                  {job?.paymentLabourChargeWaived ? "FREE" : fmt(billableLabourCharge)}
-                </Text>
-              </View>
-            ) : null}
-
-            {/* Additional Charges */}
-            {billableAdditional > 0 ? (
-              <View style={styles.sheetTableRow}>
-                <Text style={[styles.td, { width: 24, textAlign: "center" }]}>{2 + (job?.spareParts?.length ?? 0) + (labourCharge > 0 ? 1 : 0)}</Text>
-                <Text style={[styles.td, { flex: 1, paddingRight: 4 }]}>Additional Charges</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>1</Text>
-                <Text style={[styles.td, { width: 34, textAlign: "center" }]}>Job</Text>
-                <Text style={[styles.td, { width: 62, textAlign: "right" }]}>{fmt(billableAdditional)}</Text>
-                <Text style={[styles.td, { width: 70, textAlign: "right", fontWeight: "700" }]}>{fmt(billableAdditional)}</Text>
-              </View>
-            ) : null}
 
             {/* Total Row */}
-            <View style={styles.sheetTableTotalRow}>
-              <Text style={[styles.tdTotal, { flex: 1, textAlign: "right", paddingRight: 8 }]}>Total</Text>
-              <Text style={[styles.tdTotal, { width: 34, textAlign: "center" }]}>{totalQuantitySum}</Text>
-              <Text style={[styles.tdTotal, { width: 34 }]}></Text>
-              <Text style={[styles.tdTotal, { width: 62 }]}></Text>
-              <Text style={[styles.tdTotal, { width: 70, textAlign: "right" }]}>{fmt(calculatedSubtotal)}</Text>
+            <View style={styles.tableTotalRow}>
+              <Text style={[styles.totalRowText, styles.colIdx]}></Text>
+              <Text style={[styles.totalRowText, styles.colItem]}>Total</Text>
+              <Text style={[styles.totalRowText, styles.colQty]}>{totalItemQty}</Text>
+              <Text style={[styles.totalRowText, styles.colUnit]}></Text>
+              <Text style={[styles.totalRowText, styles.colPrice]}></Text>
+              <Text style={[styles.totalRowText, styles.colAmount]}>{fmt(totalItemAmount)}</Text>
             </View>
           </View>
 
-          {/* ── Bottom Section: Words & Terms (Left) / Totals & Signatory (Right) ─ */}
-          <View style={styles.sheetBottomRow}>
-            {/* Left: Words + Terms */}
-            <View style={styles.sheetBottomLeft}>
-              <Text style={styles.amountWordsHeading}>Invoice Amount in Words</Text>
-              <Text style={styles.amountWordsText}>{amountInWords}</Text>
+          {/* 5. LOWER SECTION: Words & Terms (Left) | Summary & Auth (Right) */}
+          <View style={styles.lowerSection}>
+            {/* Left: Words & Terms */}
+            <View style={styles.lowerLeft}>
+              <Text style={styles.lowerHeading}>Invoice Amount In Words</Text>
+              <Text style={styles.amountInWordsText}>{billing.amountInWords}</Text>
 
-              <Text style={styles.termsHeading}>Terms and Conditions</Text>
-              <Text style={styles.termsItem}>• All services completed by certified technicians.</Text>
-              <Text style={styles.termsItem}>• Warranty on spare parts as per manufacturer policy.</Text>
-              <Text style={styles.termsItem}>• Please retain this service bill for warranty verification.</Text>
+              <Text style={[styles.lowerHeading, { marginTop: 14 }]}>Terms And Conditions</Text>
+              {termsAndConditions.map((term, index) => (
+                <Text key={`term-${index}`} style={styles.termText}>
+                  {term}
+                </Text>
+              ))}
             </View>
 
-            {/* Right: Totals + Signature */}
-            <View style={styles.sheetBottomRight}>
+            {/* Right: Billing Summary & Authorization */}
+            <View style={styles.lowerRight}>
               <View style={styles.summaryLine}>
                 <Text style={styles.summaryLabel}>Sub Total</Text>
-                <Text style={styles.summaryVal}>{fmt(calculatedSubtotal)}</Text>
+                <Text style={styles.summaryVal}>{fmt(billing.subtotal)}</Text>
               </View>
-              {billableDiscount > 0 ? (
+
+              {billing.discount > 0 ? (
                 <View style={styles.summaryLine}>
-                  <Text style={[styles.summaryLabel, { color: theme.colors.success }]}>Discount</Text>
-                  <Text style={[styles.summaryVal, { color: theme.colors.success }]}>-{fmt(billableDiscount)}</Text>
-                </View>
-              ) : null}
-              {calculatedGst > 0 ? (
-                <View style={styles.summaryLine}>
-                  <Text style={styles.summaryLabel}>GST ({gstPercent}%)</Text>
-                  <Text style={styles.summaryVal}>{fmt(calculatedGst)}</Text>
+                  <Text style={styles.summaryLabel}>Discount</Text>
+                  <Text style={[styles.summaryVal, { color: "#dc2626" }]}>-{fmt(billing.discount)}</Text>
                 </View>
               ) : null}
 
-              <View style={styles.grandSummaryLine}>
-                <Text style={styles.grandSummaryLabel}>Total</Text>
-                <Text style={styles.grandSummaryVal}>{fmt(calculatedTotal)}</Text>
+              {billing.gstAmount > 0 ? (
+                <View style={styles.summaryLine}>
+                  <Text style={styles.summaryLabel}>GST ({billing.gstPercent}%)</Text>
+                  <Text style={styles.summaryVal}>{fmt(billing.gstAmount)}</Text>
+                </View>
+              ) : null}
+
+              {/* Total Banner (Solid Green, White Text) */}
+              <View style={styles.totalBanner}>
+                <Text style={styles.totalBannerText}>Total</Text>
+                <Text style={styles.totalBannerText}>{fmt(billing.total)}</Text>
               </View>
 
               <View style={styles.summaryLine}>
-                <Text style={[styles.summaryLabel, { color: "#6b7280" }]}>Received</Text>
-                <Text style={[styles.summaryVal, { color: "#111827" }]}>{fmt(calculatedTotal)}</Text>
-              </View>
-              <View style={styles.summaryLine}>
-                <Text style={[styles.summaryLabel, { color: "#6b7280" }]}>Balance</Text>
-                <Text style={[styles.summaryVal, { color: "#111827" }]}>₹0.00</Text>
+                <Text style={styles.summaryLabel}>Received</Text>
+                <Text style={styles.summaryVal}>{fmt(billing.receivedAmount)}</Text>
               </View>
 
-              <View style={styles.signatoryBlock}>
-                <Text style={styles.signForLabel}>For: {tenantName}</Text>
-                {tenantSignatureUrl ? (
-                  <Image source={{ uri: tenantSignatureUrl }} style={styles.signImage} resizeMode="contain" />
+              <View style={styles.summaryLine}>
+                <Text style={styles.summaryLabel}>Balance</Text>
+                <Text style={styles.summaryVal}>{fmt(billing.balanceAmount)}</Text>
+              </View>
+
+              {/* AUTHORIZATION */}
+              <View style={styles.authContainer}>
+                <Text style={styles.authForText}>For: {company.companyName}</Text>
+                {company.sealUrl ? (
+                  <View style={styles.sealWrapper}>
+                    <Image
+                      source={{ uri: company.sealUrl }}
+                      style={styles.companySeal}
+                      resizeMode="contain"
+                    />
+                  </View>
                 ) : (
-                  <View style={styles.signSpace} />
+                  <View style={styles.signatorySpace} />
                 )}
-                <View style={styles.signUnderline} />
-                <Text style={styles.signatoryDesignation}>Authorized Signatory</Text>
+                <Text style={styles.signatoryText}>{authorization.authorizedSignatoryName}</Text>
               </View>
             </View>
           </View>
         </View>
 
-        {/* Action Options */}
-        <View style={styles.actions}>
+        {/* ========================================================
+            6. ACTIONS: DOWNLOAD & SHARE INVOICE
+            ======================================================== */}
+        <View style={styles.actionsContainer}>
           <View style={styles.btnRow}>
             <AppButton
-              title={downloading ? "Downloading..." : "Download PDF"}
+              title={downloading ? "Downloading..." : "Download Invoice"}
               onPress={handleDownload}
               variant="outline"
-              style={{ flex: 1 }}
+              size="md"
+              style={styles.actionBtn}
               loading={downloading}
-              icon={<Download size={18} color={theme.colors.primary} />}
+              disabled={downloading || sharing}
+              icon={<Download size={16} color="#15803d" style={{ marginRight: 6 }} />}
             />
             <AppButton
-              title="Share Invoice"
+              title={sharing ? "Sharing..." : "Share Invoice"}
               onPress={handleShare}
-              variant="outline"
-              style={{ flex: 1 }}
-              icon={<Share2 size={18} color={theme.colors.primary} />}
+              variant="primary"
+              size="md"
+              style={[styles.actionBtn, { backgroundColor: "#15803d" }]}
+              loading={sharing}
+              disabled={downloading || sharing}
+              icon={<Share2 size={16} color="#ffffff" style={{ marginRight: 6 }} />}
             />
           </View>
-
-          <AppButton
-            title="Completed Ticket"
-            onPress={() => navigation.navigate("TechnicianHome")}
-            variant="primary"
-            size="lg"
-            style={{ marginTop: 8 }}
-          />
         </View>
       </ScrollView>
 
-      {/* Alert popup modal */}
+      {/* Alert Feedback Modal */}
       <AppAlertModal
         visible={alertVisible}
         title={alertTitle}
@@ -962,292 +908,299 @@ export const InvoiceGenerateScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content: { padding: 14, paddingBottom: 40 },
-  centerCol: { alignItems: "center", marginBottom: 14, marginTop: 2 },
-  iconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 8,
+  container: {
+    flex: 1,
   },
-  title: { fontSize: 17, fontWeight: "800", marginBottom: 2 },
-  subtitle: { fontSize: 12, textAlign: "center", lineHeight: 16, paddingHorizontal: 16 },
-
-  // ── AUTHENTIC SERVICE BILL PAPER SHEET ─────────────────────────────
-  paperSheet: {
+  scrollContent: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 90,
+  },
+  billContainer: {
     backgroundColor: "#ffffff",
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: "#e2e8f0",
     padding: 16,
-    marginBottom: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  sheetHeaderRow: {
+  headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    paddingBottom: 8,
+    alignItems: "center",
   },
-  sheetCompanyInfo: {
+  companyCol: {
     flex: 1,
-    paddingRight: 10,
+    paddingRight: 16,
   },
-  sheetCompanyName: {
+  companyName: {
     fontSize: 15,
-    fontWeight: "900",
-    color: "#111827",
+    fontWeight: "800",
+    color: "#0f172a",
     textTransform: "uppercase",
     letterSpacing: 0.3,
   },
-  sheetCompanyText: {
+  companyMeta: {
+    fontSize: 11,
+    color: "#334155",
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  logoCol: {
+    width: 100,
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
+  companyLogo: {
+    width: 90,
+    height: 60,
+  },
+  greenDivider: {
+    height: 1.5,
+    backgroundColor: "#15803d",
+    marginVertical: 10,
+    width: "100%",
+  },
+  serviceBillTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#15803d",
+    textAlign: "center",
+    letterSpacing: 0.5,
+    marginBottom: 14,
+  },
+  twoColRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  colLeft: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  colRight: {
+    flex: 1,
+    alignItems: "flex-end",
+    paddingLeft: 8,
+  },
+  sectionHeading: {
+    fontSize: 11.5,
+    fontWeight: "700",
+    color: "#0f172a",
+    marginBottom: 3,
+  },
+  customerName: {
+    fontSize: 12.5,
+    fontWeight: "800",
+    color: "#0f172a",
+    textTransform: "uppercase",
+  },
+  customerMeta: {
     fontSize: 10.5,
-    color: "#374151",
+    color: "#334155",
     marginTop: 1.5,
     lineHeight: 14,
   },
-  sheetLogo: {
-    width: 54,
-    height: 54,
-  },
-  sheetLogoBox: {
-    width: 50,
-    height: 50,
-    borderWidth: 1.5,
-    borderColor: "#111827",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sheetLogoText: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#111827",
-  },
-  sheetTitleContainer: {
-    borderTopWidth: 1.5,
-    borderBottomWidth: 1.5,
-    borderColor: "#111827",
-    paddingVertical: 4,
-    marginVertical: 8,
-    alignItems: "center",
-  },
-  sheetTitleText: {
-    fontSize: 13,
-    fontWeight: "900",
-    letterSpacing: 1.2,
-    color: "#111827",
-  },
-  sheetMetaRow: {
+  metaRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
+    alignItems: "center",
+    marginTop: 2,
   },
-  sheetMetaLeft: {
-    flex: 1.1,
-    paddingRight: 6,
+  metaLabel: {
+    fontSize: 10.5,
+    color: "#64748b",
   },
-  sheetMetaRight: {
-    flex: 0.9,
-    paddingLeft: 4,
-  },
-  sheetMetaHeading: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#111827",
-    marginBottom: 2,
-  },
-  sheetCustomerName: {
-    fontSize: 11.5,
+  metaValue: {
+    fontSize: 10.5,
     fontWeight: "700",
-    color: "#111827",
+    color: "#0f172a",
   },
-  sheetMetaLine: {
-    fontSize: 10,
-    color: "#374151",
-    marginTop: 1,
-    lineHeight: 13,
-  },
-  inlineMetaRow: {
-    flexDirection: "row",
-    marginTop: 1,
-  },
-  inlineMetaLabel: {
-    width: 78,
-    fontSize: 10,
-    color: "#4b5563",
-  },
-  inlineMetaVal: {
-    flex: 1,
-    fontSize: 10,
-    color: "#111827",
-    fontWeight: "600",
-  },
-
-  // ── Table ──────────────────────────────────────────────────────────
-  sheetTable: {
+  tableContainer: {
     borderWidth: 1,
-    borderColor: "#475569",
-    marginBottom: 10,
+    borderColor: "#e2e8f0",
+    borderRadius: 4,
+    overflow: "hidden",
+    marginBottom: 14,
   },
-  sheetTableHeader: {
+  tableHeader: {
     flexDirection: "row",
-    backgroundColor: "#1e293b",
-    paddingVertical: 5,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: "#475569",
+    backgroundColor: "#15803d",
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    alignItems: "center",
   },
-  th: {
-    fontSize: 10,
+  thText: {
+    fontSize: 10.5,
     fontWeight: "700",
     color: "#ffffff",
   },
-  sheetTableRow: {
+  tableRow: {
     flexDirection: "row",
+    paddingVertical: 7,
+    paddingHorizontal: 6,
     borderBottomWidth: 1,
-    borderBottomColor: "#475569",
-    paddingVertical: 6,
-    paddingHorizontal: 4,
-    alignItems: "center",
+    borderBottomColor: "#f1f5f9",
+    alignItems: "flex-start",
   },
-  td: {
+  tdText: {
     fontSize: 10.5,
-    color: "#111827",
+    color: "#0f172a",
   },
-  tableItemTitle: {
+  colIdx: {
+    width: 22,
+    textAlign: "center",
+  },
+  colItem: {
+    flex: 3,
+    paddingRight: 4,
+  },
+  colQty: {
+    width: 38,
+    textAlign: "center",
+  },
+  colUnit: {
+    width: 38,
+    textAlign: "center",
+  },
+  colPrice: {
+    width: 65,
+    textAlign: "right",
+  },
+  colAmount: {
+    width: 65,
+    textAlign: "right",
+  },
+  itemNameText: {
     fontSize: 10.5,
-    fontWeight: "600",
-    color: "#111827",
+    fontWeight: "700",
+    color: "#0f172a",
   },
-  tableItemSub: {
-    fontSize: 9,
-    color: "#6b7280",
+  itemDescText: {
+    fontSize: 9.5,
+    color: "#64748b",
+    marginTop: 1,
   },
-  sheetTableTotalRow: {
+  tableTotalRow: {
     flexDirection: "row",
-    backgroundColor: "#f9fafb",
-    paddingVertical: 5,
-    paddingHorizontal: 4,
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    backgroundColor: "#f8fafc",
+    borderTopWidth: 1.5,
+    borderTopColor: "#0f172a",
+    borderBottomWidth: 1.5,
+    borderBottomColor: "#0f172a",
     alignItems: "center",
   },
-  tdTotal: {
+  totalRowText: {
     fontSize: 10.5,
     fontWeight: "800",
-    color: "#111827",
+    color: "#0f172a",
   },
-
-  // ── Bottom 2-Column: Words/Terms on Left, Totals/Signature on Right ─
-  sheetBottomRow: {
+  lowerSection: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 4,
+    alignItems: "flex-start",
+    marginTop: 6,
   },
-  sheetBottomLeft: {
+  lowerLeft: {
     flex: 1.1,
     paddingRight: 10,
   },
-  sheetBottomRight: {
+  lowerRight: {
     flex: 0.9,
+    paddingLeft: 4,
   },
-  amountWordsHeading: {
-    fontSize: 10,
+  lowerHeading: {
+    fontSize: 11,
     fontWeight: "800",
-    color: "#111827",
+    color: "#0f172a",
+    marginBottom: 3,
   },
-  amountWordsText: {
-    fontSize: 10,
-    fontStyle: "italic",
-    color: "#1f2937",
-    marginTop: 1,
-    marginBottom: 10,
+  amountInWordsText: {
+    fontSize: 10.5,
+    color: "#334155",
     lineHeight: 14,
   },
-  termsHeading: {
+  termText: {
     fontSize: 10,
-    fontWeight: "800",
-    color: "#111827",
-    marginBottom: 2,
-  },
-  termsItem: {
-    fontSize: 9,
-    color: "#4b5563",
-    lineHeight: 12.5,
-    marginTop: 1,
+    color: "#334155",
+    marginTop: 2,
   },
   summaryLine: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 1.5,
+    alignItems: "center",
+    paddingVertical: 2.5,
   },
   summaryLabel: {
-    fontSize: 10.5,
-    color: "#374151",
+    fontSize: 11,
+    color: "#334155",
   },
   summaryVal: {
-    fontSize: 10.5,
-    fontWeight: "600",
-    color: "#111827",
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0f172a",
   },
-  grandSummaryLine: {
+  totalBanner: {
+    backgroundColor: "#15803d",
     flexDirection: "row",
     justifyContent: "space-between",
-    borderTopWidth: 1.5,
-    borderBottomWidth: 1.5,
-    borderColor: "#111827",
-    paddingVertical: 3,
+    alignItems: "center",
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    marginVertical: 4,
+    borderRadius: 3,
+  },
+  totalBannerText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+    color: "#ffffff",
+  },
+  authContainer: {
+    marginTop: 16,
+    alignItems: "flex-end",
+  },
+  authForText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0f172a",
+  },
+  sealWrapper: {
+    height: 48,
+    width: 80,
+    justifyContent: "center",
+    alignItems: "flex-end",
     marginVertical: 3,
   },
-  grandSummaryLabel: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#111827",
+  sealImage: {
+    width: 75,
+    height: 44,
   },
-  grandSummaryVal: {
-    fontSize: 11.5,
-    fontWeight: "900",
-    color: "#111827",
+  companySeal: {
+    width: 75,
+    height: 44,
   },
-  signatoryBlock: {
-    alignItems: "flex-end",
-    marginTop: 14,
+  signatorySpace: {
+    height: 36,
   },
-  signForLabel: {
-    fontSize: 10,
+  signatoryText: {
+    fontSize: 10.5,
     fontWeight: "700",
-    color: "#111827",
-    marginBottom: 4,
+    color: "#0f172a",
   },
-  signImage: {
-    width: 80,
-    height: 32,
-    marginBottom: 2,
+  actionsContainer: {
+    marginTop: 16,
   },
-  signSpace: {
-    height: 24,
-  },
-  signUnderline: {
-    width: 110,
-    borderTopWidth: 1,
-    borderColor: "#111827",
-    marginBottom: 2,
-  },
-  signatoryDesignation: {
-    fontSize: 9.5,
-    fontWeight: "700",
-    color: "#374151",
-  },
-
-  // ── Actions ────────────────────────────────────────────────────────
-  actions: { gap: 10, marginTop: 4 },
   btnRow: {
     flexDirection: "row",
     gap: 12,
+  },
+  actionBtn: {
+    flex: 1,
   },
 });

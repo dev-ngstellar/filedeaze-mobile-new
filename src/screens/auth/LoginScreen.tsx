@@ -127,17 +127,13 @@ export const LoginScreen = () => {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.headerSection}>
-          {(APP_CONFIG as any).logo ? (
-            <View style={[styles.logoRing, { borderColor: `${theme.colors.primary}30` }]}>
-              <Image source={{ uri: (APP_CONFIG as any).logo }} style={styles.logo} />
-            </View>
-          ) : (
-            <View style={[styles.logoRing, { borderColor: `${theme.colors.primary}28` }]}>
-              <View style={[styles.logoPlaceholder, { backgroundColor: theme.colors.primary }]}>
-                <Shield color="#ffffff" size={36} />
-              </View>
-            </View>
-          )}
+          <View style={[styles.logoRing, { borderColor: `${theme.colors.primary}30`, backgroundColor: "#ffffff" }]}>
+            <Image
+              source={require("../../assets/icon-logo.png")}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          </View>
           <Text style={[styles.appName, { color: theme.colors.text, fontSize: theme.typography.fontSize.xxl }]}>
             {APP_CONFIG.appName}
           </Text>

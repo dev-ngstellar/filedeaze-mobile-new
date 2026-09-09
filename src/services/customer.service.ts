@@ -359,7 +359,10 @@ export const CustomerService = {
       address: string;
       city: string;
       state: string;
+      pincode?: string;
+      gstin?: string;
       logoUrl: string | null;
+      sealUrl?: string | null;
     };
     settings?: any;
   }> => apiClient.get(`/mobile/customer/invoices/${id}`).then((r) => r.data.data),

@@ -326,14 +326,15 @@ export function useCheckIn() {
     onSuccess: (data) => {
       console.log("=== TRACE: useCheckIn onSuccess ===");
       console.log("Mutated CheckIn Return Object:", JSON.stringify(data, null, 2));
-      console.log("Mutated CheckIn Values:", {
-        checkInLocation: (data as any)?.checkInLocation,
-        location: (data as any)?.location,
-        checkInRemarks: (data as any)?.checkInRemarks,
-        remarks: (data as any)?.remarks,
+
+      // Optimistically update React Query cache with checkedIn = true and checkOutTime = undefined
+      queryClient.setQueryData(jobQueryKeys.attendance(), {
+        ...data,
+        checkedIn: true,
+        checkOutTime: undefined,
+        rawCheckOutTime: undefined,
+        shiftCompleted: false,
       });
-      // Directly populate React Query cache with the fresh check-in object
-      queryClient.setQueryData(jobQueryKeys.attendance(), data);
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendance() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendanceHistory() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.technicianList() });
@@ -354,10 +355,35 @@ export function useCheckOut() {
     } = {}) => JobService.checkOut(latitude, longitude),
     onSuccess: (data: any) => {
       const rawAttendance = data?.data || data;
-      const normalized = normalizeAttendanceRecord(rawAttendance);
+      const checkOutTimeStr = rawAttendance?.checkOutTime || rawAttendance?.timestamp || new Date().toISOString();
+      const previousAttendance = queryClient.getQueryData<any>(jobQueryKeys.attendance());
+
+      const rawCheckInTimeStr = previousAttendance?.rawCheckInTime;
+      let workingHours = previousAttendance?.workingHours;
+      if (rawCheckInTimeStr && checkOutTimeStr) {
+        const diffMs = new Date(checkOutTimeStr).getTime() - new Date(rawCheckInTimeStr).getTime();
+        const totalMins = Math.max(0, Math.floor(diffMs / 60000));
+        const h = Math.floor(totalMins / 60);
+        const m = totalMins % 60;
+        workingHours = `${h}h ${String(m).padStart(2, "0")}m`;
+      }
+
+      const formattedCheckOutTime = new Date(checkOutTimeStr).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Asia/Kolkata",
+      });
+
+      // Preserve checkInTime from previous session and record checkout
       queryClient.setQueryData(jobQueryKeys.attendance(), {
-        ...normalized,
+        ...previousAttendance,
         checkedIn: false,
+        checkInTime: previousAttendance?.checkInTime,
+        rawCheckInTime: previousAttendance?.rawCheckInTime,
+        checkOutTime: formattedCheckOutTime,
+        rawCheckOutTime: checkOutTimeStr,
+        workingHours: workingHours || previousAttendance?.workingHours,
+        shiftCompleted: true,
       });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendance() });
       queryClient.invalidateQueries({ queryKey: jobQueryKeys.attendanceHistory() });

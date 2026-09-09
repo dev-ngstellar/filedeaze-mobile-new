@@ -10,6 +10,7 @@ import {
   TextInput,
   ScrollView,
   RefreshControl,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
@@ -188,7 +189,7 @@ export const TechnicianHomeScreen = () => {
     customerName: inv.ticket?.customer?.name || "Client",
     customerMobile: "",
     description: `Payment Mode: ${inv.payment?.method || "N/A"}\nTotal Collected: ₹${inv.total}`,
-    scheduledDate: inv.generatedAt 
+    scheduledDate: inv.generatedAt
       ? new Date(inv.generatedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })
       : "—",
     scheduledTime: inv.generatedAt
@@ -219,7 +220,11 @@ export const TechnicianHomeScreen = () => {
   const completedCount = invoices.length;
   const completionRate = jobsList.length > 0 ? Math.round((completedCount / jobsList.length) * 100) : 0;
 
+  const [isSubmittingAttendance, setIsSubmittingAttendance] = useState(false);
+  const [attendanceStatusMsg, setAttendanceStatusMsg] = useState("");
+
   const handleCheckInPress = () => {
+    if (isSubmittingAttendance || checkInMutation.isPending || isAttendanceLoading) return;
     if (attendance?.checkedIn) {
       Alert.alert("Already Checked In", "You already have an active check-in session.");
       return;
@@ -227,20 +232,21 @@ export const TechnicianHomeScreen = () => {
     setLocationModalVisible(true);
   };
 
-  const [isSubmittingAttendance, setIsSubmittingAttendance] = useState(false);
-
   const handleCheckInSubmit = async () => {
     if (isSubmittingAttendance || checkInMutation.isPending) return;
     if (attendance?.checkedIn) {
       Alert.alert("Already Checked In", "You already have an active check-in session.");
+      setLocationModalVisible(false);
       return;
     }
     setIsSubmittingAttendance(true);
+    setAttendanceStatusMsg("Acquiring GPS location...");
     try {
       const coords = await getFreshLocationForAttendance();
 
       let finalLocation = locationInput.trim();
       if (!finalLocation) {
+        setAttendanceStatusMsg("Verifying address...");
         try {
           const geocoded = await Location.reverseGeocodeAsync({
             latitude: coords.latitude,
@@ -261,6 +267,7 @@ export const TechnicianHomeScreen = () => {
         finalLocation = `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`;
       }
 
+      setAttendanceStatusMsg("Recording check-in...");
       await checkInMutation.mutateAsync({
         location: finalLocation,
         latitude: coords.latitude,
@@ -272,14 +279,25 @@ export const TechnicianHomeScreen = () => {
       setSuccessMessage("Attendance checked in successfully.");
       setSuccessModalVisible(true);
     } catch (err: any) {
+      const status = err?.response?.status;
       const msg = err?.response?.data?.message || err?.message || "We couldn't record your check-in. Please check your location settings and try again.";
-      Alert.alert("Check-In Failed", Array.isArray(msg) ? msg.join("\n") : msg);
+      const displayMsg = Array.isArray(msg) ? msg.join("\n") : msg;
+
+      if (status === 409) {
+        setLocationModalVisible(false);
+        refetchAttendance();
+        Alert.alert("Attendance Conflict", displayMsg);
+      } else {
+        Alert.alert("Check-In Failed", displayMsg);
+      }
     } finally {
       setIsSubmittingAttendance(false);
+      setAttendanceStatusMsg("");
     }
   };
 
   const handleCheckOutSubmit = async () => {
+    if (isSubmittingAttendance || checkOutMutation.isPending || isAttendanceLoading) return;
     if (!attendance?.checkedIn) {
       Alert.alert("Check-In Required", "You must check in first before recording check-out.");
       return;
@@ -287,15 +305,13 @@ export const TechnicianHomeScreen = () => {
     setCheckoutModalVisible(true);
   };
 
-
-
   const getElapsedWorkingHours = () => {
     if (!attendance?.rawCheckInTime) return "0h 00m";
     const checkInDate = new Date(attendance.rawCheckInTime);
     const currentDate = new Date();
     const diffMs = currentDate.getTime() - checkInDate.getTime();
     if (diffMs <= 0) return "0h 00m";
-    
+
     const totalMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(totalMins / 60);
     const mins = totalMins % 60;
@@ -304,20 +320,29 @@ export const TechnicianHomeScreen = () => {
 
   const handleConfirmCheckOut = async () => {
     if (isSubmittingAttendance || checkOutMutation.isPending) return;
-    setCheckoutModalVisible(false);
     setIsSubmittingAttendance(true);
+    setAttendanceStatusMsg("Acquiring GPS location...");
     try {
       const coords = await getFreshLocationForAttendance();
+      setAttendanceStatusMsg("Recording check-out...");
       const res: any = await checkOutMutation.mutateAsync({
         latitude: coords.latitude,
         longitude: coords.longitude,
       });
-      
-      // Calculate working hours from backend response data
+
+      setCheckoutModalVisible(false);
+
+      // Calculate working hours from backend response data or elapsed time
       let workingHoursStr = "N/A";
       const attendanceData = res?.data;
       if (attendanceData?.checkInTime && attendanceData?.checkOutTime) {
         const diffMs = new Date(attendanceData.checkOutTime).getTime() - new Date(attendanceData.checkInTime).getTime();
+        const totalMins = Math.max(0, Math.floor(diffMs / 60000));
+        const h = Math.floor(totalMins / 60);
+        const m = totalMins % 60;
+        workingHoursStr = `${h}h ${String(m).padStart(2, "0")}m`;
+      } else if (attendance?.rawCheckInTime) {
+        const diffMs = Math.max(0, Date.now() - new Date(attendance.rawCheckInTime).getTime());
         const totalMins = Math.floor(diffMs / 60000);
         const h = Math.floor(totalMins / 60);
         const m = totalMins % 60;
@@ -328,9 +353,20 @@ export const TechnicianHomeScreen = () => {
       setSuccessMessage(`Successfully checked out.\nWorking hours today: ${workingHoursStr}`);
       setSuccessModalVisible(true);
     } catch (err: any) {
-      Alert.alert("Check-Out Failed", "We couldn't record your check-out. Please check your location settings and try again.");
+      setCheckoutModalVisible(false);
+      const status = err?.response?.status;
+      const msg = err?.response?.data?.message || err?.message || "We couldn't record your check-out. Please check your location settings and try again.";
+      const displayMsg = Array.isArray(msg) ? msg.join("\n") : msg;
+
+      if (status === 409) {
+        refetchAttendance();
+        Alert.alert("Attendance Conflict", displayMsg);
+      } else {
+        Alert.alert("Check-Out Failed", displayMsg);
+      }
     } finally {
       setIsSubmittingAttendance(false);
+      setAttendanceStatusMsg("");
     }
   };
 
@@ -432,8 +468,8 @@ export const TechnicianHomeScreen = () => {
                   backgroundColor: attendance?.checkedIn
                     ? "#4ade80"
                     : attendance?.checkOutTime
-                    ? "#facc15"
-                    : "rgba(255,255,255,0.4)",
+                      ? "#facc15"
+                      : "rgba(255,255,255,0.4)",
                 },
               ]}
             />
@@ -441,8 +477,8 @@ export const TechnicianHomeScreen = () => {
               {attendance?.checkedIn
                 ? `Active · Since ${attendance.checkInTime}`
                 : attendance?.checkOutTime
-                ? "Checked Out · Ready to Check In"
-                : "Not Checked In"}
+                  ? "Checked Out · Ready to Check In"
+                  : "Not Checked In"}
             </Text>
           </View>
 
@@ -536,6 +572,8 @@ export const TechnicianHomeScreen = () => {
                 variant="danger"
                 icon={<LogOut size={16} color="#ffffff" />}
                 style={{ marginTop: 16 }}
+                disabled={isSubmittingAttendance || checkOutMutation.isPending || isAttendanceLoading}
+                loading={isSubmittingAttendance || checkOutMutation.isPending}
               />
             </View>
           ) : (
@@ -585,6 +623,8 @@ export const TechnicianHomeScreen = () => {
                 variant="primary"
                 icon={<LogIn size={16} color="#ffffff" />}
                 style={{ marginTop: 8 }}
+                disabled={isSubmittingAttendance || checkInMutation.isPending || isAttendanceLoading}
+                loading={isSubmittingAttendance || checkInMutation.isPending}
               />
             </View>
           )}
@@ -613,7 +653,7 @@ export const TechnicianHomeScreen = () => {
             <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.success }}>Invoices</Text>
           </Pressable>
         </View>
-        
+
         <View style={styles.statsGrid}>
           <View style={styles.statsRow}>
             <Pressable
@@ -752,8 +792,8 @@ export const TechnicianHomeScreen = () => {
       </ScrollView>
 
       {/* Location Check-In Modal */}
-      <Modal visible={locationModalVisible} transparent animationType="slide" onRequestClose={() => setLocationModalVisible(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setLocationModalVisible(false)}>
+      <Modal visible={locationModalVisible} transparent animationType="slide" onRequestClose={() => !isSubmittingAttendance && setLocationModalVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => !isSubmittingAttendance && setLocationModalVisible(false)}>
           <Pressable
             style={[styles.premiumModalCard, { backgroundColor: theme.colors.card }]}
             onPress={(e) => e.stopPropagation()}
@@ -776,28 +816,43 @@ export const TechnicianHomeScreen = () => {
             <TextInput
               value={locationInput}
               onChangeText={setLocationInput}
+              editable={!isSubmittingAttendance}
               style={[
                 styles.premiumLocationInput,
                 {
                   borderColor: theme.colors.border,
                   color: theme.colors.text,
                   backgroundColor: theme.colors.background,
+                  opacity: isSubmittingAttendance ? 0.7 : 1,
                 },
               ]}
               placeholder="e.g. Noida Sector 62 Office"
               placeholderTextColor={theme.colors.textLight}
             />
+
+            {isSubmittingAttendance && (
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginVertical: 10 }}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+                <Text style={{ fontSize: 13, color: theme.colors.primary, fontWeight: "600" }}>
+                  {attendanceStatusMsg || "Acquiring GPS location..."}
+                </Text>
+              </View>
+            )}
+
             <View style={styles.premiumButtonRow}>
               <AppButton
                 title="Cancel"
                 variant="ghost"
+                disabled={isSubmittingAttendance}
                 onPress={() => setLocationModalVisible(false)}
                 style={styles.premiumBtn}
                 textStyle={{ color: theme.colors.textMuted }}
               />
               <AppButton
-                title="Check In"
+                title={isSubmittingAttendance ? (attendanceStatusMsg || "Checking In...") : "Check In"}
                 variant="primary"
+                loading={isSubmittingAttendance}
+                disabled={isSubmittingAttendance}
                 onPress={handleCheckInSubmit}
                 style={styles.premiumBtn}
               />
@@ -808,11 +863,17 @@ export const TechnicianHomeScreen = () => {
 
       <AppConfirmModal
         visible={checkoutModalVisible}
-        title="Confirm Check Out"
-        message={`Are you sure you want to check out for the day?\n\nWorking hours logged so far: ${getElapsedWorkingHours()}`}
-        confirmText="Check Out"
+        title={isSubmittingAttendance ? "Processing Check Out" : "Confirm Check Out"}
+        message={
+          isSubmittingAttendance
+            ? (attendanceStatusMsg || "Recording check-out...")
+            : `Are you sure you want to check out for the day?\n\nWorking hours logged so far: ${getElapsedWorkingHours()}`
+        }
+        confirmText={isSubmittingAttendance ? (attendanceStatusMsg || "Checking Out...") : "Check Out"}
+        loading={isSubmittingAttendance || checkOutMutation.isPending}
+        showCancel={!isSubmittingAttendance}
         onConfirm={handleConfirmCheckOut}
-        onCancel={() => setCheckoutModalVisible(false)}
+        onCancel={() => !isSubmittingAttendance && setCheckoutModalVisible(false)}
         confirmVariant="danger"
       />
 
@@ -829,7 +890,7 @@ export const TechnicianHomeScreen = () => {
         confirmVariant="danger"
       />
 
-      
+
 
       <AppSuccessModal
         visible={successModalVisible}
