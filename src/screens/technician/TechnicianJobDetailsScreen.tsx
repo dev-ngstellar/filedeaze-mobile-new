@@ -14,6 +14,7 @@ import {
   Switch,
   Modal,
   PanResponder,
+  ActivityIndicator,
 } from "react-native";
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -56,7 +57,7 @@ import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useTheme } from "../../theme";
 import { apiClient } from "../../api/client";
 import { TechnicianStackParamList } from "../../types/navigation.types";
-import { TicketStatus, JobService, SparePartUsageDraft, CollectPaymentResult } from "../../services/job.service";
+import { TicketStatus, JobService, SparePartUsageDraft, CollectPaymentResult, PaymentBreakdown } from "../../services/job.service";
 import { PaymentService, PlatformCharges, MobilePaymentConfig } from "../../services/payment.service";
 import { APP_CONFIG } from "../../config/app.config";
 import {
@@ -71,6 +72,7 @@ import {
   usePaymentPreview,
   useUploadTicketImage,
   useTechnicianJobs,
+  useTechnicianInvoices,
   useAttendanceStatus,
   useSaveBeforePhotos,
   useAssignAssetToTicket,
@@ -117,13 +119,42 @@ export const TechnicianJobDetailsScreen = () => {
   const [shouldNavigateHome, setShouldNavigateHome] = useState(false);
 
   const { data: job, isLoading, refetch } = useJobDetails(jobId);
-  const isPendingCredit = Boolean(
-    job &&
-    (job.paymentMethod === "CREDIT" || (job as any)?.payment?.method === "CREDIT") &&
-    (job.paymentStatus === "PENDING" || (job as any)?.payment?.status === "PENDING")
-  );
   const { data: attendance } = useAttendanceStatus();
   const { data: allJobs = [] } = useTechnicianJobs();
+  const { data: technicianInvoices = [] } = useTechnicianInvoices();
+
+  const matchedInvoice = useMemo(() => {
+    if (!job) return undefined;
+    return technicianInvoices.find(
+      (inv: any) =>
+        (job.id && inv.ticketId === job.id) ||
+        (job.ticketNo && inv.ticket?.ticketNumber === job.ticketNo) ||
+        (job.invoiceNo && inv.invoiceNumber === job.invoiceNo)
+    );
+  }, [technicianInvoices, job]);
+
+  const isPendingCredit = Boolean(
+    job &&
+    (
+      job.paymentMethod === "CREDIT" ||
+      (job as any)?.payment?.method === "CREDIT" ||
+      matchedInvoice?.payment?.method === "CREDIT"
+    ) &&
+    (
+      job.paymentStatus === "PENDING" ||
+      (job as any)?.payment?.status === "PENDING" ||
+      (matchedInvoice?.payment as any)?.status === "PENDING"
+    )
+  );
+
+  const companyForInvoice = useMemo(() => {
+    return (
+      matchedInvoice?.company ||
+      job?.tenant ||
+      JobService.getCachedCompanyInfo() ||
+      undefined
+    );
+  }, [matchedInvoice, job?.tenant]);
   const updateStatusMutation = useUpdateJobStatus();
   const completeJobMutation = useCompleteJob();
   const rescheduleJobMutation = useRescheduleJob();
@@ -302,23 +333,44 @@ export const TechnicianJobDetailsScreen = () => {
   // Existing pending credit amount source of truth:
   // Prefer invoiceTotal (final grand total on the invoice), then payment amount fields.
   const existingCreditAmount = useMemo(() => {
-    if (!job) return 0;
-    if (job.invoiceTotal != null && !isNaN(Number(job.invoiceTotal)) && Number(job.invoiceTotal) > 0) {
+    if (!job && !matchedInvoice) return 0;
+    // 1. Matched invoice from technician invoices query (includes spare parts + GST)
+    if (matchedInvoice?.total != null && !isNaN(Number(matchedInvoice.total)) && Number(matchedInvoice.total) > 0) {
+      return Number(matchedInvoice.total);
+    }
+    // 2. Direct invoice total on job
+    if (job?.invoiceTotal != null && !isNaN(Number(job.invoiceTotal)) && Number(job.invoiceTotal) > 0) {
       return Number(job.invoiceTotal);
     }
+    // 3. rawInvoice total on job
+    if (job?.rawInvoice?.total != null && !isNaN(Number(job.rawInvoice.total)) && Number(job.rawInvoice.total) > 0) {
+      return Number(job.rawInvoice.total);
+    }
+    // 4. (job as any)?.invoice?.total
+    const invTotalDirect = (job as any)?.invoice?.total;
+    if (invTotalDirect != null && !isNaN(Number(invTotalDirect)) && Number(invTotalDirect) > 0) {
+      return Number(invTotalDirect);
+    }
+    // 5. (job as any)?.payment?.invoice?.total
     const pInvTotal = (job as any)?.payment?.invoice?.total;
     if (pInvTotal != null && !isNaN(Number(pInvTotal)) && Number(pInvTotal) > 0) {
       return Number(pInvTotal);
     }
-    if (job.paymentCollection != null && !isNaN(Number(job.paymentCollection)) && Number(job.paymentCollection) > 0) {
+    // 6. (job as any)?.paidAmount
+    if ((job as any)?.paidAmount != null && !isNaN(Number((job as any).paidAmount)) && Number((job as any).paidAmount) > 0) {
+      return Number((job as any).paidAmount);
+    }
+    // 7. job?.paymentCollection
+    if (job?.paymentCollection != null && !isNaN(Number(job.paymentCollection)) && Number(job.paymentCollection) > 0) {
       return Number(job.paymentCollection);
     }
+    // 8. (job as any)?.payment?.amount
     const pAmt = (job as any)?.payment?.amount;
     if (pAmt != null && !isNaN(Number(pAmt)) && Number(pAmt) > 0) {
       return Number(pAmt);
     }
     return 0;
-  }, [job]);
+  }, [job, matchedInvoice]);
 
   const handleOpenCollectOutstanding = () => {
     setPaymentConfirmed(false);
@@ -332,12 +384,45 @@ export const TechnicianJobDetailsScreen = () => {
   // platform/shipping/handling fees) is billed via the backend's generic additionalCharge bucket.
   const backendAdditionalCharge = extraChargesSum + platformFee + shippingCharge + handlingCharge;
 
+  // Debounce technician-entered service charge and additional charges (500ms) to avoid intermediate keystroke requests
+  const [debouncedBase, setDebouncedBase] = useState(base);
+  const [debouncedAdditionalCharge, setDebouncedAdditionalCharge] = useState(backendAdditionalCharge);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedBase(base);
+      setDebouncedAdditionalCharge(backendAdditionalCharge);
+    }, 500);
+
+    return () => clearTimeout(handler);
+  }, [base, backendAdditionalCharge]);
+
+  // Synchronize debounced amounts immediately upon entering the payment step
+  useEffect(() => {
+    if (completeFormVisible && completeStep === 2) {
+      setDebouncedBase(base);
+      setDebouncedAdditionalCharge(backendAdditionalCharge);
+    }
+  }, [completeFormVisible, completeStep]);
+
   // Backend-computed breakdown for the payment step — only used during normal Flow A billing
-  const { data: paymentPreview } = usePaymentPreview(
+  const {
+    data: rawPaymentPreview,
+    isLoading: isPreviewLoading,
+    isFetching: isPreviewFetching,
+    isError: isPreviewError,
+    refetch: refetchPreview,
+  } = usePaymentPreview(
     jobId,
-    { serviceCharge: base, labourCharge: labour, additionalCharge: backendAdditionalCharge, discount: discountAmount },
+    { serviceCharge: debouncedBase, labourCharge: labour, additionalCharge: debouncedAdditionalCharge, discount: discountAmount },
     completeFormVisible && completeStep === 2 && !isPendingCredit
   );
+
+  // Normalize payment preview response object (supporting both unwrapped breakdown or { data: breakdown })
+  const paymentPreview: PaymentBreakdown | null = useMemo(() => {
+    if (!rawPaymentPreview) return null;
+    return (rawPaymentPreview as any)?.data ?? rawPaymentPreview;
+  }, [rawPaymentPreview]);
 
   // Reached Location GPS State
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>({ lat: 28.6139, lng: 77.2090 });
@@ -415,10 +500,16 @@ export const TechnicianJobDetailsScreen = () => {
     if (job.isAmcCovered) {
       setAmountStr("0");
     } else {
-      const defaultAmount = job.serviceCharge ?? job.categoryPrice ?? 0;
+      const rawPrice = Number(job.serviceCharge ?? job.categoryPrice ?? 0);
+      const isGst = !!paymentConfig?.gstEnabled && Number(paymentConfig?.gstPercent || 0) > 0;
+      const gstPct = Number(paymentConfig?.gstPercent || 0);
+      const isInclusive = isGst && rawPrice > 0 && Math.abs(Math.round(rawPrice / (1 + gstPct / 100)) * (1 + gstPct / 100) - rawPrice) < 0.05;
+      const defaultAmount = isInclusive
+        ? Math.round((rawPrice / (1 + gstPct / 100)) * 100) / 100
+        : rawPrice;
       setAmountStr(String(defaultAmount));
     }
-  }, [job?.isAmcCovered, job?.serviceCharge, job?.categoryPrice, isPendingCredit, existingCreditAmount]);
+  }, [job?.isAmcCovered, job?.serviceCharge, job?.categoryPrice, isPendingCredit, existingCreditAmount, paymentConfig]);
 
   useEffect(() => {
     if (!job) return;
@@ -1120,10 +1211,13 @@ export const TechnicianJobDetailsScreen = () => {
 
         // Navigate to Invoice / Receipt with the exact consistent amount
         navigation.replace("InvoiceGenerate", {
+          company: companyForInvoice,
+          invoice: matchedInvoice,
           jobId: jobId,
           ticketNo: job?.ticketNo ?? jobId,
           amount: existingCreditAmount,
           paymentMethod: paymentMode,
+          paymentStatus: "COLLECTED",
           invoiceNo: payResult.invoiceNumber || job?.invoiceNo || `INV-${job?.ticketNo ?? jobId}`,
           invoiceSubtotal: job?.invoiceSubtotal ?? existingCreditAmount,
           invoiceGstAmount: job?.invoiceGstAmount ?? 0,
@@ -1203,10 +1297,13 @@ export const TechnicianJobDetailsScreen = () => {
 
       // Go directly to Invoice Screen
       navigation.replace("InvoiceGenerate", {
+        company: companyForInvoice,
+        invoice: matchedInvoice,
         jobId: jobId,
         ticketNo: job?.ticketNo ?? jobId,
         amount: payResult.grandTotal ?? 0,
         paymentMethod: paymentMode,
+        paymentStatus: "COLLECTED",
         invoiceNo: payResult.invoiceNumber,
         invoiceSubtotal: payResult.subtotal,
         invoiceGstAmount: payResult.gstAmount,
@@ -2037,10 +2134,13 @@ export const TechnicianJobDetailsScreen = () => {
                 grandTotal={job.invoiceTotal ?? job.paymentCollection ?? 0}
                 currency={currencySymbol}
                 onViewInvoice={() => navigation.navigate("InvoiceGenerate", {
+                  company: companyForInvoice,
+                  invoice: matchedInvoice,
                   jobId: job.id,
                   ticketNo: job.ticketNo,
                   amount: job.paymentCollection ?? 0,
                   paymentMethod: job.paymentMethod ?? (isPendingCredit ? "CREDIT" : "CASH"),
+                  paymentStatus: job.paymentStatus ?? (isPendingCredit ? "PENDING" : "COLLECTED"),
                   invoiceNo: job.invoiceNo ?? `INV-${job.ticketNo}`,
                   invoiceSubtotal: job.invoiceSubtotal,
                   invoiceGstAmount: job.invoiceGstAmount,
@@ -2951,78 +3051,160 @@ export const TechnicianJobDetailsScreen = () => {
                           ))}
                         </View>
 
-                        {/* Real-time Payment Preview Breakdown */}
-                        {paymentPreview && (
-                          <View style={{ marginTop: 16, backgroundColor: `${theme.colors.primary}06`, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: `${theme.colors.primary}20` }}>
-                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                              <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Service Charge</Text>
-                              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
-                                {currencySymbol}{paymentPreview.serviceCharge.toLocaleString("en-IN")}
-                              </Text>
-                            </View>
-
-                            {paymentPreview.labourCharge > 0 && (
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Labour Charge</Text>
-                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
-                                  {currencySymbol}{paymentPreview.labourCharge.toLocaleString("en-IN")}
-                                </Text>
+                        {/* Billing & Payment Summary Section */}
+                        <View style={{ marginTop: 16 }}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 0, fontSize: 13, fontWeight: "600" }]}>
+                              Billing & Payment Summary
+                            </Text>
+                            {isPreviewFetching && paymentPreview && (
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <ActivityIndicator size="small" color={theme.colors.primary} />
+                                <Text style={{ fontSize: 11, color: theme.colors.primary, fontWeight: "500" }}>Updating...</Text>
                               </View>
                             )}
-
-                            {paymentPreview.sparePartsAmount > 0 && (
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Spare Parts (Chargeable)</Text>
-                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
-                                  {currencySymbol}{paymentPreview.sparePartsAmount.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            )}
-
-                            {paymentPreview.additionalCharge > 0 && (
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Additional Charges</Text>
-                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
-                                  {currencySymbol}{paymentPreview.additionalCharge.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            )}
-
-                            {paymentPreview.discount > 0 && (
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                                <Text style={{ fontSize: 12, color: theme.colors.success }}>Discount</Text>
-                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.success }}>
-                                  -{currencySymbol}{paymentPreview.discount.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            )}
-
-                            <View style={{ height: 1, backgroundColor: theme.colors.borderLight, marginVertical: 6 }} />
-
-                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>Subtotal</Text>
-                              <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.text }}>
-                                {currencySymbol}{paymentPreview.subtotal.toLocaleString("en-IN")}
-                              </Text>
-                            </View>
-
-                            {paymentPreview.gstAmount > 0 && (
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                                <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>GST ({paymentPreview.gstPercent}%)</Text>
-                                <Text style={{ fontSize: 11, fontWeight: "600", color: theme.colors.text }}>
-                                  +{currencySymbol}{paymentPreview.gstAmount.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            )}
-
-                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderColor: `${theme.colors.primary}30` }}>
-                              <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.primary }}>Grand Total</Text>
-                              <Text style={{ fontSize: 16, fontWeight: "900", color: theme.colors.primary }}>
-                                {currencySymbol}{paymentPreview.grandTotal.toLocaleString("en-IN")}
-                              </Text>
-                            </View>
                           </View>
-                        )}
+
+                          {/* Loading state when no preview data is available yet */}
+                          {(isPreviewLoading || isPreviewFetching) && !paymentPreview && (
+                            <View style={{ padding: 16, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.borderLight, backgroundColor: `${theme.colors.primary}04`, alignItems: "center", justifyContent: "center", gap: 8 }}>
+                              <ActivityIndicator size="small" color={theme.colors.primary} />
+                              <Text style={{ fontSize: 12, color: theme.colors.textMuted, fontWeight: "500" }}>
+                                Calculating billing summary...
+                              </Text>
+                            </View>
+                          )}
+
+                          {/* Error state when request failed and no preview data is available */}
+                          {isPreviewError && !paymentPreview && (
+                            <View style={{ padding: 12, borderRadius: 10, borderWidth: 1, borderColor: `${theme.colors.danger}30`, backgroundColor: `${theme.colors.danger}08`, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1, marginRight: 8 }}>
+                                <AlertCircle size={18} color={theme.colors.danger} />
+                                <Text style={{ fontSize: 12, color: theme.colors.danger, fontWeight: "500", flex: 1 }}>
+                                  Unable to calculate payment breakdown from server.
+                                </Text>
+                              </View>
+                              <Pressable
+                                onPress={() => refetchPreview()}
+                                style={{ paddingHorizontal: 10, paddingVertical: 5, backgroundColor: theme.colors.card, borderRadius: 6, borderWidth: 1, borderColor: `${theme.colors.danger}40` }}
+                              >
+                                <Text style={{ fontSize: 11, fontWeight: "700", color: theme.colors.danger }}>Retry</Text>
+                              </Pressable>
+                            </View>
+                          )}
+
+                          {/* Rendered breakdown directly from backend response */}
+                          {paymentPreview && (
+                            <View style={{ backgroundColor: `${theme.colors.primary}06`, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: `${theme.colors.primary}20` }}>
+                              {/* Service Charge Row */}
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Service Charge</Text>
+                                {paymentPreview.serviceChargeWaived ? (
+                                  <View style={{ alignItems: "flex-end" }}>
+                                    <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.success }}>FREE</Text>
+                                    <Text style={{ fontSize: 10, fontWeight: "600", color: theme.colors.success }}>
+                                      {paymentPreview.billingType === "WARRANTY" ? "Covered by Warranty" : "Covered by AMC"}
+                                    </Text>
+                                  </View>
+                                ) : (
+                                  <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                    {currencySymbol}{paymentPreview.serviceCharge.toLocaleString("en-IN")}
+                                  </Text>
+                                )}
+                              </View>
+
+                              {/* Labour Charge Row */}
+                              {(paymentPreview.labourCharge > 0 || paymentPreview.labourChargeWaived) && (
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                  <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Labour Charge</Text>
+                                  {paymentPreview.labourChargeWaived ? (
+                                    <View style={{ alignItems: "flex-end" }}>
+                                      <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.success }}>FREE</Text>
+                                      <Text style={{ fontSize: 10, fontWeight: "600", color: theme.colors.success }}>Covered by AMC</Text>
+                                    </View>
+                                  ) : (
+                                    <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                      {currencySymbol}{paymentPreview.labourCharge.toLocaleString("en-IN")}
+                                    </Text>
+                                  )}
+                                </View>
+                              )}
+
+                              {/* Chargeable Spare Parts */}
+                              {paymentPreview.sparePartsAmount > 0 && (
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                  <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Chargeable Spare Parts</Text>
+                                  <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                    {currencySymbol}{paymentPreview.sparePartsAmount.toLocaleString("en-IN")}
+                                  </Text>
+                                </View>
+                              )}
+
+                              {/* Warranty / AMC Savings (Informational, parts covered at no charge) */}
+                              {((paymentPreview.warrantyPartsValue ?? 0) > 0 || (paymentPreview.amcPartsValue ?? 0) > 0) && (
+                                <View style={{ marginBottom: 6, backgroundColor: `${theme.colors.primary}08`, padding: 8, borderRadius: 6 }}>
+                                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                                    <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.primary }}>Warranty / AMC Savings</Text>
+                                    <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.primary }}>
+                                      {currencySymbol}{((paymentPreview.warrantyPartsValue || 0) + (paymentPreview.amcPartsValue || 0)).toLocaleString("en-IN")}
+                                    </Text>
+                                  </View>
+                                  <Text style={{ fontSize: 10, color: theme.colors.textMuted, marginTop: 2 }}>
+                                    Value of parts covered under warranty/AMC — not added to total.
+                                  </Text>
+                                </View>
+                              )}
+
+                              {/* Additional Charges */}
+                              {paymentPreview.additionalCharge > 0 && (
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                  <Text style={{ fontSize: 12, color: theme.colors.textMuted }}>Additional Charges</Text>
+                                  <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>
+                                    {currencySymbol}{paymentPreview.additionalCharge.toLocaleString("en-IN")}
+                                  </Text>
+                                </View>
+                              )}
+
+                              {/* Discount */}
+                              {paymentPreview.discount > 0 && (
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                  <Text style={{ fontSize: 12, color: theme.colors.success }}>Discount</Text>
+                                  <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.success }}>
+                                    -{currencySymbol}{paymentPreview.discount.toLocaleString("en-IN")}
+                                  </Text>
+                                </View>
+                              )}
+
+                              <View style={{ height: 1, backgroundColor: theme.colors.borderLight, marginVertical: 6 }} />
+
+                              {/* Subtotal Row */}
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                                <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.text }}>Subtotal</Text>
+                                <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.text }}>
+                                  {currencySymbol}{paymentPreview.subtotal.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+
+                              {/* GST Row (Dynamic % from API) */}
+                              {paymentPreview.gstEnabled && paymentPreview.gstAmount > 0 && (
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                  <Text style={{ fontSize: 11, color: theme.colors.textMuted }}>GST ({paymentPreview.gstPercent}%)</Text>
+                                  <Text style={{ fontSize: 11, fontWeight: "600", color: theme.colors.text }}>
+                                    +{currencySymbol}{paymentPreview.gstAmount.toLocaleString("en-IN")}
+                                  </Text>
+                                </View>
+                              )}
+
+                              {/* Grand Total Row */}
+                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderColor: `${theme.colors.primary}30` }}>
+                                <Text style={{ fontSize: 14, fontWeight: "800", color: theme.colors.primary }}>Grand Total</Text>
+                                <Text style={{ fontSize: 16, fontWeight: "900", color: theme.colors.primary }}>
+                                  {currencySymbol}{paymentPreview.grandTotal.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            </View>
+                          )}
+                        </View>
 
                         {/* Mode cash/upi */}
                         <Text style={[styles.formLabel, { color: theme.colors.text, marginTop: 18, fontSize: 13, fontWeight: "600" }]}>Payment Mode</Text>

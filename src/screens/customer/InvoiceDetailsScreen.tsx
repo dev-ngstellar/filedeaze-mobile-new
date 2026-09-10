@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   Image,
+  Platform,
 } from "react-native";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -21,6 +22,7 @@ import { AppButton } from "../../components/AppButton";
 import { AppAlertModal } from "../../components/AppAlertModal";
 import { numberToIndianWords } from "../../utils/numberToWords";
 import { APP_CONFIG } from "../../config/app.config";
+import { getPdfFilename, preparePdfForSharing } from "../../utils/pdfShare";
 
 type NavigationProp = NativeStackNavigationProp<CustomerStackParamList, "InvoiceDetails">;
 type RouteProps = RouteProp<CustomerStackParamList, "InvoiceDetails">;
@@ -247,13 +249,21 @@ export const InvoiceDetailsScreen = () => {
   const { invoice: rawInvoice, tenant, settings } = invoiceData;
   const invoice = rawInvoice as any;
 
-  // Exact backend total — source of truth (NO calculation on frontend)
-  const totalAmount = Number(
+  // Exact backend total — handling tax-inclusive invoices
+  const rawTotal = Number(
     invoice.total ??
     invoice.totalAmount ??
     invoice.grandTotal ??
     0
   );
+  const rawSubtotal = Number(invoice.subtotal ?? 0);
+  const gstPercent = Number(invoice.gstPercent ?? 0);
+  const isTaxInclusive =
+    gstPercent > 0 &&
+    rawSubtotal > 0 &&
+    Math.abs(rawSubtotal * (1 + gstPercent / 100) - rawTotal) < 0.05;
+
+  const totalAmount = isTaxInclusive ? rawSubtotal : rawTotal;
 
   const formattedAmount = totalAmount.toLocaleString("en-IN", {
     minimumFractionDigits: 2,
@@ -280,7 +290,12 @@ export const InvoiceDetailsScreen = () => {
   const customerCityPin = [customerCity, customerPincode].filter(Boolean).join(" - ");
 
   // Company Details (From Tenant API data)
-  const companyName = tenant?.companyName || APP_CONFIG.appName;
+  const companyName =
+    tenant?.companyName ||
+    (invoice as any)?.tenant?.companyName ||
+    (invoice as any)?.company?.companyName ||
+    (invoice as any)?.companyName ||
+    APP_CONFIG.appName;
   const companyAddress = tenant?.address || "";
   const companyCity = tenant?.city || "";
   const companyPincode = (tenant as any)?.pincode || "";
@@ -328,10 +343,31 @@ export const InvoiceDetailsScreen = () => {
         signatoryText
       );
       const { uri } = await Print.printToFileAsync({ html });
+      const filename = getPdfFilename(companyName, "payment-receipt");
+
+      if (Platform.OS === "web") {
+        if (typeof document !== "undefined") {
+          const link = document.createElement("a");
+          link.href = uri;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          showAlert("Receipt Ready", `Payment Receipt #${invoiceNumber} is ready.`, "success");
+          return;
+        }
+      }
+
+      const shareUri = await preparePdfForSharing(uri, filename);
+
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri);
+        await Sharing.shareAsync(shareUri, {
+          mimeType: "application/pdf",
+          dialogTitle: `Save Payment Receipt #${invoiceNumber}`,
+          UTI: "com.adobe.pdf",
+        });
       } else {
-        await Print.printAsync({ uri });
+        await Print.printAsync({ uri: shareUri });
       }
       showAlert("Receipt Ready", `Payment Receipt #${invoiceNumber} is ready.`, "success");
     } catch {
@@ -368,7 +404,16 @@ export const InvoiceDetailsScreen = () => {
         signatoryText
       );
       const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri, {
+      const filename = getPdfFilename(companyName, "payment-receipt");
+
+      if (!(await Sharing.isAvailableAsync())) {
+        showAlert("Sharing Unavailable", "Sharing is not supported on this device.", "warning");
+        return;
+      }
+
+      const shareUri = await preparePdfForSharing(uri, filename);
+
+      await Sharing.shareAsync(shareUri, {
         mimeType: "application/pdf",
         dialogTitle: `Share Payment Receipt #${invoiceNumber}`,
         UTI: "com.adobe.pdf",

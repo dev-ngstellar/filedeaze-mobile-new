@@ -19,7 +19,7 @@ import {
   Info,
 } from "lucide-react-native";
 import { useTheme } from "../../theme";
-import { useCustomerPayments, useCustomerTickets } from "../../hooks/useCustomer";
+import { useCustomerPayments, useCustomerTickets, useCustomerInvoices } from "../../hooks/useCustomer";
 import { CustomerPayment } from "../../services/customer.service";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
@@ -52,11 +52,16 @@ export const CustomerCreditScreen = () => {
     data: payments = [],
     isLoading,
     isError,
-    refetch,
+    refetch: refetchPayments,
     isFetching,
   } = useCustomerPayments();
 
-  const { data: tickets = [] } = useCustomerTickets();
+  const { data: tickets = [], refetch: refetchTickets } = useCustomerTickets();
+  const { data: invoices = [], refetch: refetchInvoices, isFetching: isFetchingInvoices } = useCustomerInvoices();
+
+  const refetch = async () => {
+    await Promise.all([refetchPayments(), refetchTickets(), refetchInvoices()]);
+  };
 
   // Map ticketId to real human-readable ticket number (e.g. TKT-2026-00048)
   const ticketMap = useMemo(() => {
@@ -87,49 +92,130 @@ export const CustomerCreditScreen = () => {
 
   // Filter strictly for Pay Later / Credit records: method === "CREDIT" AND status === "PENDING"
   const creditItems: CreditItem[] = useMemo(() => {
-    if (!Array.isArray(payments)) return [];
+    const items: CreditItem[] = [];
+    const processedTicketIds = new Set<string>();
 
-    return payments
-      .filter(
-        (p: CustomerPayment) =>
-          p.method === "CREDIT" && p.status === "PENDING"
-      )
-      .map((p: CustomerPayment) => {
-        const ticketId = p.ticketId || p.ticket?.id || p.id;
-        const total = p.invoice?.total != null
-          ? Number(p.invoice.total)
-          : Number(p.amount || 0);
+    if (Array.isArray(payments)) {
+      payments
+        .filter(
+          (p: CustomerPayment) =>
+            p.method === "CREDIT" && p.status === "PENDING"
+        )
+        .forEach((p: CustomerPayment) => {
+          const ticketId = p.ticketId || p.ticket?.id || p.id;
+          if (ticketId) processedTicketIds.add(String(ticketId));
 
-        const paid = 0; // PENDING credit has not been collected yet
-        const outstanding = total;
+          const matchInv = (invoices || []).find(
+            (inv: any) =>
+              (p.invoiceId && inv.id === p.invoiceId) ||
+              (ticketId && inv.ticketId === ticketId) ||
+              (p.invoice?.invoiceNumber && inv.invoiceNumber === p.invoice.invoiceNumber) ||
+              (p.invoice?.id && inv.id === p.invoice.id) ||
+              (p.ticket?.ticketNumber && inv.ticket?.ticketNumber === p.ticket.ticketNumber)
+          );
 
-        const ticketNum =
-          ticketMap.get(String(ticketId)) ||
-          p.ticket?.ticketNumber ||
-          (ticketId ? `TKT-${String(ticketId).substring(0, 8).toUpperCase()}` : "Ticket");
+          const matchTicket = (tickets || []).find(
+            (t: any) =>
+              (ticketId && t.id === ticketId) ||
+              (p.ticket?.ticketNumber && t.ticketNumber === p.ticket.ticketNumber)
+          );
 
-        const service =
-          p.ticket?.subCategory?.name ||
-          p.ticket?.description ||
-          "Service";
+          const total =
+            matchInv?.total != null && !isNaN(Number(matchInv.total)) && Number(matchInv.total) > 0
+              ? Number(matchInv.total)
+              : matchTicket?.invoice?.total != null && !isNaN(Number(matchTicket.invoice.total)) && Number(matchTicket.invoice.total) > 0
+              ? Number(matchTicket.invoice.total)
+              : matchTicket?.paidAmount != null && !isNaN(Number(matchTicket.paidAmount)) && Number(matchTicket.paidAmount) > 0
+              ? Number(matchTicket.paidAmount)
+              : p.invoice?.total != null && !isNaN(Number(p.invoice.total)) && Number(p.invoice.total) > 0
+              ? Number(p.invoice.total)
+              : matchTicket?.payment?.amount != null && !isNaN(Number(matchTicket.payment.amount)) && Number(matchTicket.payment.amount) > 0
+              ? Number(matchTicket.payment.amount)
+              : Number(p.amount || 0);
 
-        const category = p.ticket?.subCategory?.category?.name || "";
+          const paid = 0; // PENDING credit has not been collected yet
+          const outstanding = total;
 
-        return {
-          id: p.id,
-          ticketId: String(ticketId),
-          ticketNumber: ticketNum,
-          serviceName: service,
-          categoryName: category,
-          serviceDate: p.createdAt || new Date().toISOString(),
+          const ticketNum =
+            ticketMap.get(String(ticketId)) ||
+            matchTicket?.ticketNumber ||
+            matchInv?.ticket?.ticketNumber ||
+            p.ticket?.ticketNumber ||
+            (ticketId ? `TKT-${String(ticketId).substring(0, 8).toUpperCase()}` : "Ticket");
+
+          const service =
+            matchTicket?.subCategory?.name ||
+            matchInv?.ticket?.subCategory?.name ||
+            p.ticket?.subCategory?.name ||
+            matchTicket?.description ||
+            p.ticket?.description ||
+            "Service";
+
+          const category =
+            matchTicket?.subCategory?.category?.name ||
+            matchInv?.ticket?.subCategory?.category?.name ||
+            p.ticket?.subCategory?.category?.name ||
+            "";
+
+          items.push({
+            id: p.id,
+            ticketId: String(ticketId),
+            ticketNumber: ticketNum,
+            serviceName: service,
+            categoryName: category,
+            serviceDate: p.createdAt || new Date().toISOString(),
+            totalAmount: total,
+            paidAmount: paid,
+            outstandingAmount: outstanding,
+            status: "Pending",
+            invoiceNumber: matchInv?.invoiceNumber || p.invoice?.invoiceNumber,
+          });
+        });
+    }
+
+    // Also check tickets for any credit pending tickets not yet in payments list
+    (tickets || []).forEach((t: any) => {
+      const ticketId = String(t.id);
+      if (processedTicketIds.has(ticketId)) return;
+
+      const pMethod = t.payment?.method;
+      const pStatus = t.payment?.status;
+      if (pMethod === "CREDIT" && pStatus === "PENDING") {
+        processedTicketIds.add(ticketId);
+
+        const matchInv = (invoices || []).find(
+          (inv: any) =>
+            inv.ticketId === ticketId ||
+            (t.ticketNumber && inv.ticket?.ticketNumber === t.ticketNumber)
+        );
+
+        const total =
+          matchInv?.total != null && !isNaN(Number(matchInv.total)) && Number(matchInv.total) > 0
+            ? Number(matchInv.total)
+            : t.invoice?.total != null && !isNaN(Number(t.invoice.total)) && Number(t.invoice.total) > 0
+            ? Number(t.invoice.total)
+            : t.paidAmount != null && !isNaN(Number(t.paidAmount)) && Number(t.paidAmount) > 0
+            ? Number(t.paidAmount)
+            : Number(t.payment?.amount || 0);
+
+        items.push({
+          id: t.payment?.id || t.id,
+          ticketId,
+          ticketNumber: t.ticketNumber || `TKT-${ticketId.substring(0, 8).toUpperCase()}`,
+          serviceName: t.subCategory?.name || t.description || "Service",
+          categoryName: t.subCategory?.category?.name || "",
+          serviceDate: t.createdAt || new Date().toISOString(),
           totalAmount: total,
-          paidAmount: paid,
-          outstandingAmount: outstanding,
+          paidAmount: 0,
+          outstandingAmount: total,
           status: "Pending",
-          invoiceNumber: p.invoice?.invoiceNumber,
-        };
-      });
-  }, [payments, ticketMap]);
+          invoiceNumber: matchInv?.invoiceNumber || t.invoice?.invoiceNumber,
+        });
+      }
+    });
+
+    return items;
+  }, [payments, tickets, invoices, ticketMap]);
 
   const totalOutstanding = useMemo(() => {
     return creditItems.reduce((sum, item) => sum + item.outstandingAmount, 0);

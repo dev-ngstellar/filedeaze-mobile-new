@@ -154,10 +154,12 @@ export interface CustomerTicketDetail {
     review: string;
   } | null;
   cancelReason?: string | null;
+  paidAmount?: number | null;
 }
 
 export interface CustomerPayment {
   id: string;
+  invoiceId?: string;
   tenantId?: string;
   ticketId?: string;
   createdAt: string;

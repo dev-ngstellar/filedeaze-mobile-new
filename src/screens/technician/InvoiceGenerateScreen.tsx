@@ -6,6 +6,7 @@ import {
   ScrollView,
   Image,
   BackHandler,
+  Platform,
 } from "react-native";
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -24,6 +25,8 @@ import { numberToIndianWords } from "../../utils/numberToWords";
 import { APP_CONFIG } from "../../config/app.config";
 import { AuthService, TenantBrandingInfo } from "../../services/auth.service";
 import { PaymentService, MobilePaymentConfig } from "../../services/payment.service";
+import { JobService, CompanyInfo } from "../../services/job.service";
+import { getPdfFilename, preparePdfForSharing } from "../../utils/pdfShare";
 
 type RouteProps = RouteProp<TechnicianStackParamList, "InvoiceGenerate">;
 type NavigationProp = NativeStackNavigationProp<TechnicianStackParamList, "InvoiceGenerate">;
@@ -41,6 +44,7 @@ export const InvoiceGenerateScreen = () => {
   const [alertType, setAlertType] = useState<"success" | "error" | "warning">("success");
   const [tenantInfo, setTenantInfo] = useState<TenantBrandingInfo | null>(null);
   const [paymentConfig, setPaymentConfig] = useState<MobilePaymentConfig | null>(null);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(() => JobService.getCachedCompanyInfo());
 
   useEffect(() => {
     AuthService.getTenantBranding()
@@ -52,6 +56,12 @@ export const InvoiceGenerateScreen = () => {
     PaymentService.getMobilePaymentConfig()
       .then((cfg) => {
         if (cfg) setPaymentConfig(cfg);
+      })
+      .catch(() => {});
+
+    JobService.getCompanyInfo()
+      .then((info) => {
+        if (info) setCompanyInfo(info);
       })
       .catch(() => {});
   }, []);
@@ -92,6 +102,8 @@ export const InvoiceGenerateScreen = () => {
     jobId,
     ticketNo,
     amount: initialAmount,
+    paymentMethod: paramPaymentMethod,
+    paymentStatus: paramPaymentStatus,
     invoiceNo,
     invoiceSubtotal,
     invoiceGstAmount,
@@ -145,6 +157,7 @@ export const InvoiceGenerateScreen = () => {
     const rawCompany =
       paramCompany ||
       (paramInvoice as any)?.company ||
+      companyInfo ||
       (job as any)?.company ||
       (job as any)?.rawInvoice?.company ||
       (job as any)?.invoice?.company ||
@@ -157,48 +170,59 @@ export const InvoiceGenerateScreen = () => {
       companyName:
         rawCompany.companyName ||
         rawCompany.name ||
+        companyInfo?.companyName ||
+        companyInfo?.name ||
         invDetails?.company?.companyName ||
         job?.tenant?.companyName ||
         tenantInfo?.companyName ||
         APP_CONFIG.appName,
       address:
         rawCompany.address ||
+        companyInfo?.address ||
         invDetails?.company?.address ||
         job?.tenant?.address ||
         tenantInfo?.address ||
         "",
       city:
         rawCompany.city ||
+        companyInfo?.city ||
         invDetails?.company?.city ||
         job?.tenant?.city ||
         tenantInfo?.city ||
         "",
       state:
         rawCompany.state ||
+        companyInfo?.state ||
         invDetails?.company?.state ||
         job?.tenant?.state ||
         tenantInfo?.state ||
         "",
       pincode:
         rawCompany.pincode ||
+        companyInfo?.pincode ||
         invDetails?.company?.pincode ||
         job?.tenant?.pincode ||
         "",
       phone:
         rawCompany.phone ||
         rawCompany.mobile ||
+        companyInfo?.phone ||
+        companyInfo?.mobile ||
         invDetails?.company?.phone ||
         job?.tenant?.phone ||
         tenantInfo?.phone ||
         "",
       email:
         rawCompany.email ||
+        companyInfo?.email ||
         invDetails?.company?.email ||
         job?.tenant?.email ||
         "",
       gstNumber:
         rawCompany.gstNumber ||
         rawCompany.gstin ||
+        companyInfo?.gstNumber ||
+        companyInfo?.gstin ||
         invDetails?.company?.gstNumber ||
         job?.tenant?.gstNumber ||
         job?.tenant?.gstin ||
@@ -208,6 +232,8 @@ export const InvoiceGenerateScreen = () => {
       logoUrl:
         rawCompany.logoUrl ||
         rawCompany.logo ||
+        companyInfo?.logoUrl ||
+        companyInfo?.logo ||
         invDetails?.company?.logoUrl ||
         job?.tenant?.logoUrl ||
         tenantInfo?.logoUrl ||
@@ -215,6 +241,8 @@ export const InvoiceGenerateScreen = () => {
       sealUrl:
         rawCompany.sealUrl ||
         rawCompany.companySealUrl ||
+        companyInfo?.sealUrl ||
+        companyInfo?.companySealUrl ||
         invDetails?.company?.sealUrl ||
         invDetails?.authorization?.sealUrl ||
         (job as any)?.company?.sealUrl ||
@@ -256,14 +284,46 @@ export const InvoiceGenerateScreen = () => {
       invoiceDate: dateVal,
       invoiceTime: timeVal,
       billingType: invDetails?.invoice?.billingType || job?.rawInvoice?.billingType || null,
-      placeOfSupply: invDetails?.invoice?.placeOfSupply || company.state || company.city || "",
+      placeOfSupply: invDetails?.invoice?.placeOfSupply || (job as any)?.rawInvoice?.placeOfSupply || (job as any)?.invoice?.placeOfSupply || "",
     };
+
+    // Raw billing inputs from API / route params
+    const rawSubtotal = Number(invDetails?.billing?.subtotal ?? job?.invoiceSubtotal ?? invoiceSubtotal ?? initialAmount ?? 0);
+    const discount = Number(invDetails?.billing?.discount ?? job?.invoiceDiscount ?? 0);
+    const gstPercent = Number(invDetails?.billing?.gstPercent ?? job?.invoiceGstPercent ?? invoiceGstPercent ?? 0);
+    const rawGstAmount = Number(invDetails?.billing?.gstAmount ?? job?.invoiceGstAmount ?? invoiceGstAmount ?? 0);
+    const rawTotal = Number(invDetails?.billing?.total ?? job?.invoiceTotal ?? invoiceTotal ?? initialAmount ?? 0);
+
+    // Check if the service charge / subtotal was entered as a tax-inclusive total
+    // (e.g. Total = 177, but 18% GST was added on top to make 208.86, OR subtotal = 177, total = 177 with 18% GST)
+    const isTaxInclusive =
+      gstPercent > 0 &&
+      rawSubtotal > 0 &&
+      (
+        Math.abs(rawSubtotal * (1 + gstPercent / 100) - rawTotal) < 0.05 ||
+        (rawTotal > 0 && Math.abs(rawSubtotal - rawTotal) < 0.05)
+      );
+
+    const total = isTaxInclusive
+      ? (Math.abs(rawSubtotal * (1 + gstPercent / 100) - rawTotal) < 0.05 ? rawSubtotal : rawTotal)
+      : rawTotal;
+
+    const subtotal = isTaxInclusive
+      ? Math.round((total / (1 + gstPercent / 100)) * 100) / 100
+      : rawSubtotal;
+
+    const gstAmount = isTaxInclusive
+      ? Math.round((total - subtotal) * 100) / 100
+      : rawGstAmount;
 
     // Dynamic items
     let items = invDetails?.items;
     if (!items || items.length === 0) {
       const fallbackItems = [];
-      const serviceVal = Number(job?.invoiceServiceCharge ?? job?.invoiceSubtotal ?? initialAmount ?? 0);
+      const serviceVal = isTaxInclusive
+        ? subtotal
+        : Number(job?.invoiceServiceCharge ?? job?.invoiceSubtotal ?? initialAmount ?? 0);
+
       if (serviceVal > 0 || !job?.spareParts || job.spareParts.length === 0) {
         fallbackItems.push({
           itemName: (job?.service || "SERVICE").toUpperCase(),
@@ -308,16 +368,44 @@ export const InvoiceGenerateScreen = () => {
         });
       }
       items = fallbackItems;
+    } else if (items && items.length > 0 && isTaxInclusive) {
+      // If items total equals the tax-inclusive total (e.g. 177), scale item amounts to base before tax (150)
+      const itemsSum = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      if (Math.abs(itemsSum - total) < 0.05) {
+        items = items.map((it) => {
+          const qty = Number(it.quantity || 1);
+          const baseAmt = Math.round((Number(it.amount || 0) / (1 + gstPercent / 100)) * 100) / 100;
+          return {
+            ...it,
+            unitPrice: Math.round((baseAmt / (qty || 1)) * 100) / 100,
+            amount: baseAmt,
+          };
+        });
+      }
     }
 
-    // Billing summary
-    const subtotal = Number(invDetails?.billing?.subtotal ?? job?.invoiceSubtotal ?? invoiceSubtotal ?? initialAmount ?? 0);
-    const discount = Number(invDetails?.billing?.discount ?? job?.invoiceDiscount ?? 0);
-    const gstPercent = Number(invDetails?.billing?.gstPercent ?? job?.invoiceGstPercent ?? invoiceGstPercent ?? 0);
-    const gstAmount = Number(invDetails?.billing?.gstAmount ?? job?.invoiceGstAmount ?? invoiceGstAmount ?? 0);
-    const total = Number(invDetails?.billing?.total ?? job?.invoiceTotal ?? invoiceTotal ?? initialAmount ?? 0);
-    const receivedAmount = Number(invDetails?.billing?.receivedAmount ?? (job?.paymentMethod === "CREDIT" ? 0 : total));
-    const balanceAmount = Number(invDetails?.billing?.balanceAmount ?? (job?.paymentMethod === "CREDIT" ? total : 0));
+    const resolvedPaymentStatus =
+      job?.paymentStatus ||
+      (job as any)?.payment?.status ||
+      (paramInvoice as any)?.payment?.status ||
+      (paramInvoice as any)?.paymentStatus ||
+      paramPaymentStatus;
+
+    const resolvedPaymentMethod =
+      paramPaymentMethod ||
+      job?.paymentMethod ||
+      (job as any)?.payment?.method ||
+      (paramInvoice as any)?.payment?.method ||
+      "CASH";
+
+    // It is pending credit ONLY if it's explicitly CREDIT and its status is PENDING or UNPAID.
+    // If credit has been collected/settled, status is COLLECTED / PAID, so received is full and balance is 0.
+    const isCreditUnpaid =
+      resolvedPaymentMethod === "CREDIT" &&
+      (resolvedPaymentStatus === "PENDING" || resolvedPaymentStatus === "UNPAID");
+
+    const receivedAmount = Number(invDetails?.billing?.receivedAmount ?? (isCreditUnpaid ? 0 : total));
+    const balanceAmount = Number(invDetails?.billing?.balanceAmount ?? (isCreditUnpaid ? total : 0));
     const amountInWords = invDetails?.billing?.amountInWords || numberToIndianWords(total);
 
     const billing = {
@@ -358,7 +446,23 @@ export const InvoiceGenerateScreen = () => {
       totalItemQty,
       totalItemAmount,
     };
-  }, [job, invoiceNo, invoiceSubtotal, invoiceGstAmount, invoiceGstPercent, invoiceTotal, initialAmount, invoiceGeneratedAt, tenantInfo, paymentConfig]);
+  }, [
+    job,
+    invoiceNo,
+    invoiceSubtotal,
+    invoiceGstAmount,
+    invoiceGstPercent,
+    invoiceTotal,
+    initialAmount,
+    invoiceGeneratedAt,
+    tenantInfo,
+    paymentConfig,
+    companyInfo,
+    paramCompany,
+    paramInvoice,
+    paramPaymentMethod,
+    paramPaymentStatus,
+  ]);
 
   /**
    * Generates the clean, exact SERVICE BILL PDF HTML string matching the reference PDF design.
@@ -594,15 +698,31 @@ export const InvoiceGenerateScreen = () => {
       setDownloading(true);
       const html = generateServiceBillHtml();
       const { uri } = await Print.printToFileAsync({ html });
+      const filename = getPdfFilename(invoiceData.company.companyName, "service-bill");
+
+      if (Platform.OS === "web") {
+        if (typeof document !== "undefined") {
+          const link = document.createElement("a");
+          link.href = uri;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          showAlert("Invoice Ready", `Service Bill #${invoiceData.invoiceMeta.invoiceNumber} has been downloaded.`, "success");
+          return;
+        }
+      }
+
+      const shareUri = await preparePdfForSharing(uri, filename);
 
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
+        await Sharing.shareAsync(shareUri, {
           mimeType: "application/pdf",
           dialogTitle: `Save Invoice #${invoiceData.invoiceMeta.invoiceNumber}`,
-          UTI: ".pdf",
+          UTI: "com.adobe.pdf",
         });
       } else {
-        await Print.printAsync({ uri });
+        await Print.printAsync({ uri: shareUri });
       }
       showAlert("Invoice Ready", `Service Bill #${invoiceData.invoiceMeta.invoiceNumber} has been generated successfully.`, "success");
     } catch {
@@ -620,13 +740,16 @@ export const InvoiceGenerateScreen = () => {
       setSharing(true);
       const html = generateServiceBillHtml();
       const { uri } = await Print.printToFileAsync({ html });
+      const filename = getPdfFilename(invoiceData.company.companyName, "service-bill");
 
       if (!(await Sharing.isAvailableAsync())) {
         showAlert("Sharing Unavailable", "Sharing is not supported on this device.", "warning");
         return;
       }
 
-      await Sharing.shareAsync(uri, {
+      const shareUri = await preparePdfForSharing(uri, filename);
+
+      await Sharing.shareAsync(shareUri, {
         mimeType: "application/pdf",
         dialogTitle: `Share Service Bill #${invoiceData.invoiceMeta.invoiceNumber}`,
         UTI: "com.adobe.pdf",

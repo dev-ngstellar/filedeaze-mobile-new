@@ -1,9 +1,42 @@
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiClient } from "../api/client";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useAuthStore } from "../store/auth.store";
 import { APP_CONFIG } from "../config/app.config";
 import { prepareImageForUpload, prepareMediaForUpload, uploadMultipartRequest } from "../utils/mediaUpload";
+
+export interface CompanyInfo {
+  companyName?: string;
+  name?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  phone?: string;
+  mobile?: string;
+  email?: string;
+  logoUrl?: string | null;
+  logo?: string | null;
+  sealUrl?: string | null;
+  companySealUrl?: string | null;
+  gstNumber?: string;
+  gstin?: string;
+}
+
+let cachedCompanyInfo: CompanyInfo | null = null;
+const STORAGE_KEY_COMPANY_INFO = "@fieldeaze_company_info";
+
+// Preload cached company info from AsyncStorage on startup
+AsyncStorage.getItem(STORAGE_KEY_COMPANY_INFO)
+  .then((val) => {
+    if (val && !cachedCompanyInfo) {
+      try {
+        cachedCompanyInfo = JSON.parse(val);
+      } catch {}
+    }
+  })
+  .catch(() => {});
 
 // ==========================================
 // DOMAIN TYPES (re-exported for consumers)
@@ -85,6 +118,7 @@ export interface PaymentBreakdown {
   serviceChargeWaived: boolean;
   labourChargeWaived: boolean;
   warrantyPartsValue: number;
+  amcPartsValue?: number;
   additionalCharge: number;
   discount: number;
   grossAmount: number;
@@ -314,6 +348,7 @@ export interface TechnicianInvoice {
   total: number;
   pdfUrl: string | null;
   generatedAt: string;
+  company?: CompanyInfo;
   ticket?: {
     ticketNumber: string;
     customer?: {
@@ -485,21 +520,21 @@ export function normalizeTicket(raw: any): Ticket {
     customerState: raw.customer?.state ?? undefined,
     customerPincode: raw.customer?.pincode ?? undefined,
     customerGstin: raw.customer?.gstin ?? raw.customer?.gstNumber ?? undefined,
-    tenant: raw.tenant ? {
-      companyName: raw.tenant.companyName ?? raw.tenant.name,
-      email: raw.tenant.email,
-      phone: raw.tenant.phone ?? raw.tenant.mobile,
-      address: raw.tenant.address,
-      city: raw.tenant.city,
-      state: raw.tenant.state,
-      pincode: raw.tenant.pincode,
-      gstin: raw.tenant.gstin ?? raw.tenant.gstNumber,
-      gstNumber: raw.tenant.gstNumber ?? raw.tenant.gstin,
-      logoUrl: raw.tenant.logoUrl ?? raw.tenant.logo,
-      sealUrl: raw.tenant.sealUrl ?? raw.tenant.companySealUrl ?? null,
-      signatureUrl: raw.tenant.signatureUrl ?? raw.tenant.authorizedSignatureUrl ?? raw.tenant.signature,
-      authorizedSignatureUrl: raw.tenant.authorizedSignatureUrl ?? raw.tenant.signatureUrl ?? raw.tenant.signature,
-      termsAndConditions: raw.tenant.termsAndConditions ?? raw.tenant.terms,
+    tenant: (raw.tenant || cachedCompanyInfo) ? {
+      companyName: raw.tenant?.companyName ?? raw.tenant?.name ?? cachedCompanyInfo?.companyName ?? cachedCompanyInfo?.name,
+      email: raw.tenant?.email ?? cachedCompanyInfo?.email,
+      phone: raw.tenant?.phone ?? raw.tenant?.mobile ?? cachedCompanyInfo?.phone ?? cachedCompanyInfo?.mobile,
+      address: raw.tenant?.address ?? cachedCompanyInfo?.address,
+      city: raw.tenant?.city ?? cachedCompanyInfo?.city,
+      state: raw.tenant?.state ?? cachedCompanyInfo?.state,
+      pincode: raw.tenant?.pincode ?? cachedCompanyInfo?.pincode,
+      gstin: raw.tenant?.gstin ?? raw.tenant?.gstNumber ?? cachedCompanyInfo?.gstin ?? cachedCompanyInfo?.gstNumber,
+      gstNumber: raw.tenant?.gstNumber ?? raw.tenant?.gstin ?? cachedCompanyInfo?.gstNumber ?? cachedCompanyInfo?.gstin,
+      logoUrl: raw.tenant?.logoUrl ?? raw.tenant?.logo ?? cachedCompanyInfo?.logoUrl ?? cachedCompanyInfo?.logo,
+      sealUrl: raw.tenant?.sealUrl ?? raw.tenant?.companySealUrl ?? cachedCompanyInfo?.sealUrl ?? cachedCompanyInfo?.companySealUrl ?? null,
+      signatureUrl: raw.tenant?.signatureUrl ?? raw.tenant?.authorizedSignatureUrl ?? raw.tenant?.signature,
+      authorizedSignatureUrl: raw.tenant?.authorizedSignatureUrl ?? raw.tenant?.signatureUrl ?? raw.tenant?.signature,
+      termsAndConditions: raw.tenant?.termsAndConditions ?? raw.tenant?.terms,
     } : undefined,
     invoiceDetails: raw.invoiceDetails ? {
       company: {
@@ -521,7 +556,7 @@ export function normalizeTicket(raw: any): Ticket {
         invoiceDate: raw.invoiceDetails.invoice?.invoiceDate || "",
         invoiceTime: raw.invoiceDetails.invoice?.invoiceTime || "",
         billingType: raw.invoiceDetails.invoice?.billingType || raw.invoice?.billingType || raw.payment?.billingType || null,
-        placeOfSupply: raw.invoiceDetails.invoice?.placeOfSupply || raw.tenant?.state || raw.tenant?.city || "",
+        placeOfSupply: raw.invoiceDetails?.invoice?.placeOfSupply || raw.invoice?.placeOfSupply || "",
       },
       customer: {
         customerName: raw.invoiceDetails.customer?.customerName || raw.customer?.name || raw.customerName || "—",
@@ -1368,7 +1403,65 @@ export class JobService {
     if (month !== undefined) params.month = month;
     if (year !== undefined) params.year = year;
     const res = await apiClient.get<any>("/mobile/technician/invoices", { params });
-    return res.data?.data || res.data || [];
+    const list = res.data?.data || res.data || [];
+    if (Array.isArray(list) && list.length > 0) {
+      const foundWithCompany = list.find(
+        (item: any) => item?.company && (item.company.address || item.company.sealUrl || item.company.companyName)
+      );
+      if (foundWithCompany?.company) {
+        cachedCompanyInfo = {
+          ...cachedCompanyInfo,
+          ...foundWithCompany.company,
+        };
+        AsyncStorage.setItem(STORAGE_KEY_COMPANY_INFO, JSON.stringify(cachedCompanyInfo)).catch(() => {});
+      }
+    }
+    return list;
+  }
+
+  /**
+   * Synchronously get in-memory cached company info (includes address and seal if previously fetched)
+   */
+  static getCachedCompanyInfo(): CompanyInfo | null {
+    return cachedCompanyInfo;
+  }
+
+  /**
+   * Asynchronously get company info, falling back to AsyncStorage and API fetch if needed
+   */
+  static async getCompanyInfo(): Promise<CompanyInfo | null> {
+    if (cachedCompanyInfo && (cachedCompanyInfo.address || cachedCompanyInfo.sealUrl)) {
+      return cachedCompanyInfo;
+    }
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEY_COMPANY_INFO);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && (parsed.address || parsed.sealUrl || parsed.companyName)) {
+          cachedCompanyInfo = parsed;
+          return parsed;
+        }
+      }
+    } catch {}
+
+    try {
+      const invoices = await this.getTechnicianInvoices();
+      if (Array.isArray(invoices) && invoices.length > 0) {
+        const found = invoices.find(
+          (item: any) => item?.company && (item.company.address || item.company.sealUrl || item.company.companyName)
+        );
+        if (found?.company) {
+          cachedCompanyInfo = {
+            ...cachedCompanyInfo,
+            ...found.company,
+          };
+          AsyncStorage.setItem(STORAGE_KEY_COMPANY_INFO, JSON.stringify(cachedCompanyInfo)).catch(() => {});
+          return cachedCompanyInfo;
+        }
+      }
+    } catch {}
+
+    return cachedCompanyInfo;
   }
 }
 

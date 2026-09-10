@@ -56,10 +56,12 @@ export type TechnicianStackParamList = {
   WorkTimer: { jobId: string; ticketNo: string };
   InvoiceGenerate: {
     invoice?: TechnicianInvoice;
+    company?: any;
     jobId: string;
     ticketNo: string;
     amount?: number;
     paymentMethod?: string;
+    paymentStatus?: string;
     invoiceNo?: string;
     invoiceSubtotal?: number;
     invoiceGstAmount?: number;

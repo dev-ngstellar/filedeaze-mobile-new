@@ -11,7 +11,7 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Calendar, CreditCard, ChevronRight, Inbox } from "lucide-react-native";
 import { useTheme } from "../../theme";
-import { useCustomerPayments, useCustomerInvoices } from "../../hooks/useCustomer";
+import { useCustomerPayments, useCustomerInvoices, useCustomerTickets } from "../../hooks/useCustomer";
 import { CustomerStackParamList } from "../../types/navigation.types";
 import { AppHeader } from "../../components/AppHeader";
 import { AppLoader } from "../../components/AppLoader";
@@ -26,17 +26,81 @@ export const PaymentHistoryScreen = () => {
 
   const { data: payments = [], isLoading, refetch, isFetching } = useCustomerPayments();
   const { data: invoices = [] } = useCustomerInvoices();
+  const { data: tickets = [] } = useCustomerTickets();
 
   const pendingCredits = React.useMemo(() => {
     return (payments || []).filter((p) => p.method === "CREDIT" && p.status === "PENDING");
   }, [payments]);
 
   const outstandingTotal = React.useMemo(() => {
-    return pendingCredits.reduce((sum, p) => {
-      const amt = p.invoice?.total != null ? Number(p.invoice.total) : Number(p.amount || 0);
-      return sum + (isNaN(amt) ? 0 : amt);
-    }, 0);
-  }, [pendingCredits]);
+    let sum = 0;
+    const countedTicketIds = new Set<string>();
+
+    (pendingCredits || []).forEach((p: any) => {
+      const ticketId = p.ticketId || p.ticket?.id;
+      if (ticketId) countedTicketIds.add(String(ticketId));
+
+      const matchInv = (invoices || []).find(
+        (inv: any) =>
+          (p.invoiceId && inv.id === p.invoiceId) ||
+          (ticketId && inv.ticketId === ticketId) ||
+          (p.invoice?.id && inv.id === p.invoice.id) ||
+          (p.invoice?.invoiceNumber && inv.invoiceNumber === p.invoice.invoiceNumber) ||
+          (p.ticket?.ticketNumber && inv.ticket?.ticketNumber === p.ticket.ticketNumber)
+      );
+
+      const matchTicket = (tickets || []).find(
+        (t: any) =>
+          (ticketId && t.id === ticketId) ||
+          (p.ticket?.ticketNumber && t.ticketNumber === p.ticket.ticketNumber)
+      );
+
+      const amt =
+        matchInv?.total != null && !isNaN(Number(matchInv.total)) && Number(matchInv.total) > 0
+          ? Number(matchInv.total)
+          : matchTicket?.invoice?.total != null && !isNaN(Number(matchTicket.invoice.total)) && Number(matchTicket.invoice.total) > 0
+          ? Number(matchTicket.invoice.total)
+          : matchTicket?.paidAmount != null && !isNaN(Number(matchTicket.paidAmount)) && Number(matchTicket.paidAmount) > 0
+          ? Number(matchTicket.paidAmount)
+          : p.invoice?.total != null && !isNaN(Number(p.invoice.total)) && Number(p.invoice.total) > 0
+          ? Number(p.invoice.total)
+          : matchTicket?.payment?.amount != null && !isNaN(Number(matchTicket.payment.amount)) && Number(matchTicket.payment.amount) > 0
+          ? Number(matchTicket.payment.amount)
+          : Number(p.amount || 0);
+
+      sum += amt;
+    });
+
+    (tickets || []).forEach((t: any) => {
+      const ticketId = String(t.id);
+      if (countedTicketIds.has(ticketId)) return;
+
+      const pMethod = t.payment?.method;
+      const pStatus = t.payment?.status;
+      if (pMethod === "CREDIT" && pStatus === "PENDING") {
+        countedTicketIds.add(ticketId);
+
+        const matchInv = (invoices || []).find(
+          (inv: any) =>
+            inv.ticketId === ticketId ||
+            (t.ticketNumber && inv.ticket?.ticketNumber === t.ticketNumber)
+        );
+
+        const amt =
+          matchInv?.total != null && !isNaN(Number(matchInv.total)) && Number(matchInv.total) > 0
+            ? Number(matchInv.total)
+            : t.invoice?.total != null && !isNaN(Number(t.invoice.total)) && Number(t.invoice.total) > 0
+            ? Number(t.invoice.total)
+            : t.paidAmount != null && !isNaN(Number(t.paidAmount)) && Number(t.paidAmount) > 0
+            ? Number(t.paidAmount)
+            : Number(t.payment?.amount || 0);
+
+        sum += amt;
+      }
+    });
+
+    return sum;
+  }, [pendingCredits, invoices, tickets]);
 
   const getStatusVariant = (status: string) => {
     const s = (status || "").toUpperCase();

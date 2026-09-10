@@ -93,6 +93,7 @@ export const TechnicianInvoiceListScreen = () => {
               ticketNo: item.ticket?.ticketNumber || item.invoiceNumber,
               amount: Number(item.total),
               paymentMethod: item.payment?.method || "CASH",
+              paymentStatus: (item as any)?.payment?.status || (item as any)?.paymentStatus || (item.payment?.collectedAt ? "COLLECTED" : "PENDING"),
               invoiceNo: item.invoiceNumber,
               invoiceSubtotal: Number(item.subtotal),
               invoiceGstAmount: Number(item.gstAmount),

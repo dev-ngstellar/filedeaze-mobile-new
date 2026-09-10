@@ -83,12 +83,24 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
 
   // Calculate values according to requirements:
   // 1. Service Charge: billable if > 0 and not waived
-  const billableServiceCharge = (serviceCharge > 0 && !serviceChargeWaived) ? serviceCharge : 0;
+  const rawServiceCharge = (serviceCharge > 0 && !serviceChargeWaived) ? serviceCharge : 0;
 
-  // 2. GST: use backend gstAmount if provided, or calculate ONLY on billable Service Charge
+  // 2. GST: check if tax-inclusive
   const isGstEnabled = gstPercent !== undefined && gstPercent > 0;
+  const isTaxInclusive =
+    isGstEnabled &&
+    rawServiceCharge > 0 &&
+    (
+      (grandTotal != null && Math.abs(rawServiceCharge * (1 + gstPercent / 100) - grandTotal) < 0.05) ||
+      (subtotal != null && grandTotal != null && Math.abs(subtotal * (1 + gstPercent / 100) - grandTotal) < 0.05)
+    );
+
+  const billableServiceCharge = isTaxInclusive
+    ? Math.round((rawServiceCharge / (1 + gstPercent / 100)) * 100) / 100
+    : rawServiceCharge;
+
   const calculatedGstAmount = (gstAmount !== undefined && gstAmount !== null)
-    ? gstAmount
+    ? (isTaxInclusive ? Math.round((rawServiceCharge - billableServiceCharge) * 100) / 100 : gstAmount)
     : (isGstEnabled && billableServiceCharge > 0)
       ? Math.round((billableServiceCharge * gstPercent) / 100 * 100) / 100
       : 0;
@@ -107,9 +119,11 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
 
   // 7. Subtotal and Grand Total:
   const displaySubtotal = billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
-  const displayGrandTotal = (grandTotal !== undefined && grandTotal !== null && grandTotal > 0)
-    ? grandTotal
-    : Math.max(0, displaySubtotal + calculatedGstAmount);
+  const displayGrandTotal = isTaxInclusive
+    ? rawServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount
+    : (grandTotal !== undefined && grandTotal !== null && grandTotal > 0)
+      ? grandTotal
+      : Math.max(0, displaySubtotal + calculatedGstAmount);
 
   // Split spare parts by coverage type for the itemised section
   const chargeableParts = spareParts?.filter((p) => p.coverageType === "OUT_OF_WARRANTY") ?? [];
@@ -196,7 +210,7 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
           <Text style={[styles.label, { color: theme.colors.textMuted }]}>Service Charge</Text>
           <View style={{ alignItems: "flex-end" }}>
             <Text style={[styles.value, { color: serviceChargeWaived ? theme.colors.success : theme.colors.text }]}>
-              {serviceChargeWaived ? "FREE" : fmt(serviceCharge)}
+              {serviceChargeWaived ? "FREE" : fmt(billableServiceCharge)}
             </Text>
             {serviceChargeWaived ? (
               <Text style={[styles.waivedTag, { color: theme.colors.success }]}>Covered by AMC</Text>
