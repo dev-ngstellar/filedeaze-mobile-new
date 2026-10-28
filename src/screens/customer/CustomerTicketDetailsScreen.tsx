@@ -543,6 +543,7 @@ export const CustomerTicketDetailsScreen = () => {
               gstPercent={ticket.invoice.gstPercent}
               gstAmount={ticket.invoice.gstAmount}
               grandTotal={ticket.invoice.total}
+              onViewInvoice={ticket.invoice?.id ? () => navigation.navigate("InvoiceDetails", { invoiceId: ticket.invoice!.id }) : undefined}
             />
           </>
         )}

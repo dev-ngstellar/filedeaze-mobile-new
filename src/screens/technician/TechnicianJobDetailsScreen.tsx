@@ -501,13 +501,7 @@ export const TechnicianJobDetailsScreen = () => {
       setAmountStr("0");
     } else {
       const rawPrice = Number(job.serviceCharge ?? job.categoryPrice ?? 0);
-      const isGst = !!paymentConfig?.gstEnabled && Number(paymentConfig?.gstPercent || 0) > 0;
-      const gstPct = Number(paymentConfig?.gstPercent || 0);
-      const isInclusive = isGst && rawPrice > 0 && Math.abs(Math.round(rawPrice / (1 + gstPct / 100)) * (1 + gstPct / 100) - rawPrice) < 0.05;
-      const defaultAmount = isInclusive
-        ? Math.round((rawPrice / (1 + gstPct / 100)) * 100) / 100
-        : rawPrice;
-      setAmountStr(String(defaultAmount));
+      setAmountStr(String(rawPrice));
     }
   }, [job?.isAmcCovered, job?.serviceCharge, job?.categoryPrice, isPendingCredit, existingCreditAmount, paymentConfig]);
 
@@ -2138,7 +2132,7 @@ export const TechnicianJobDetailsScreen = () => {
                   invoice: matchedInvoice,
                   jobId: job.id,
                   ticketNo: job.ticketNo,
-                  amount: job.paymentCollection ?? 0,
+                  amount: job.invoiceTotal ?? job.paymentCollection ?? 0,
                   paymentMethod: job.paymentMethod ?? (isPendingCredit ? "CREDIT" : "CASH"),
                   paymentStatus: job.paymentStatus ?? (isPendingCredit ? "PENDING" : "COLLECTED"),
                   invoiceNo: job.invoiceNo ?? `INV-${job.ticketNo}`,

@@ -249,7 +249,7 @@ export const InvoiceDetailsScreen = () => {
   const { invoice: rawInvoice, tenant, settings } = invoiceData;
   const invoice = rawInvoice as any;
 
-  // Exact backend total — handling tax-inclusive invoices
+  // Exact backend total — handling all invoice types
   const rawTotal = Number(
     invoice.total ??
     invoice.totalAmount ??
@@ -258,12 +258,14 @@ export const InvoiceDetailsScreen = () => {
   );
   const rawSubtotal = Number(invoice.subtotal ?? 0);
   const gstPercent = Number(invoice.gstPercent ?? 0);
-  const isTaxInclusive =
-    gstPercent > 0 &&
-    rawSubtotal > 0 &&
-    Math.abs(rawSubtotal * (1 + gstPercent / 100) - rawTotal) < 0.05;
 
-  const totalAmount = isTaxInclusive ? rawSubtotal : rawTotal;
+  // The total amount paid/received on the invoice is always the full total (including GST)
+  const totalAmount =
+    rawTotal > 0
+      ? rawTotal
+      : rawSubtotal > 0
+      ? rawSubtotal
+      : Number(invoice.amount ?? 0);
 
   const formattedAmount = totalAmount.toLocaleString("en-IN", {
     minimumFractionDigits: 2,

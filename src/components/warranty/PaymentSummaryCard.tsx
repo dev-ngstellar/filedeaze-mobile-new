@@ -81,28 +81,16 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
   const fmt = (n: number) => `${currency}${n.toLocaleString("en-IN")}`;
   const amcApplied = !!serviceChargeWaived || !!labourChargeWaived;
 
-  // Calculate values according to requirements:
   // 1. Service Charge: billable if > 0 and not waived
   const rawServiceCharge = (serviceCharge > 0 && !serviceChargeWaived) ? serviceCharge : 0;
+  const billableServiceCharge = rawServiceCharge;
 
-  // 2. GST: check if tax-inclusive
+  // 2. GST: use exact backend amount or fallback calculation
   const isGstEnabled = gstPercent !== undefined && gstPercent > 0;
-  const isTaxInclusive =
-    isGstEnabled &&
-    rawServiceCharge > 0 &&
-    (
-      (grandTotal != null && Math.abs(rawServiceCharge * (1 + gstPercent / 100) - grandTotal) < 0.05) ||
-      (subtotal != null && grandTotal != null && Math.abs(subtotal * (1 + gstPercent / 100) - grandTotal) < 0.05)
-    );
-
-  const billableServiceCharge = isTaxInclusive
-    ? Math.round((rawServiceCharge / (1 + gstPercent / 100)) * 100) / 100
-    : rawServiceCharge;
-
   const calculatedGstAmount = (gstAmount !== undefined && gstAmount !== null)
-    ? (isTaxInclusive ? Math.round((rawServiceCharge - billableServiceCharge) * 100) / 100 : gstAmount)
-    : (isGstEnabled && billableServiceCharge > 0)
-      ? Math.round((billableServiceCharge * gstPercent) / 100 * 100) / 100
+    ? Number(gstAmount)
+    : (isGstEnabled && (subtotal ?? rawServiceCharge) > 0)
+      ? Math.round(((subtotal ?? rawServiceCharge) * gstPercent) / 100 * 100) / 100
       : 0;
 
   // 3. Labour Charge: billable if > 0 and not waived
@@ -117,13 +105,15 @@ export const PaymentSummaryCard: React.FC<PaymentSummaryCardProps> = ({
   // 6. Discount:
   const billableDiscount = discount && discount > 0 ? discount : 0;
 
-  // 7. Subtotal and Grand Total:
-  const displaySubtotal = billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
-  const displayGrandTotal = isTaxInclusive
-    ? rawServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount
-    : (grandTotal !== undefined && grandTotal !== null && grandTotal > 0)
-      ? grandTotal
-      : Math.max(0, displaySubtotal + calculatedGstAmount);
+  // 7. Subtotal and Grand Total: exactly as returned by the API
+  const calculatedSubtotal = billableServiceCharge + billableLabourCharge + billableSpareParts + billableAdditional - billableDiscount;
+  const displaySubtotal = (subtotal !== undefined && subtotal !== null && Number(subtotal) > 0)
+    ? Number(subtotal)
+    : calculatedSubtotal;
+
+  const displayGrandTotal = (grandTotal !== undefined && grandTotal !== null && Number(grandTotal) > 0)
+    ? Number(grandTotal)
+    : Math.max(0, displaySubtotal + calculatedGstAmount);
 
   // Split spare parts by coverage type for the itemised section
   const chargeableParts = spareParts?.filter((p) => p.coverageType === "OUT_OF_WARRANTY") ?? [];

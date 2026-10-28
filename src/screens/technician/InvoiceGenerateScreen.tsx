@@ -288,41 +288,44 @@ export const InvoiceGenerateScreen = () => {
     };
 
     // Raw billing inputs from API / route params
-    const rawSubtotal = Number(invDetails?.billing?.subtotal ?? job?.invoiceSubtotal ?? invoiceSubtotal ?? initialAmount ?? 0);
+    const rawSubtotal = Number(invDetails?.billing?.subtotal ?? job?.invoiceSubtotal ?? invoiceSubtotal ?? 0);
     const discount = Number(invDetails?.billing?.discount ?? job?.invoiceDiscount ?? 0);
     const gstPercent = Number(invDetails?.billing?.gstPercent ?? job?.invoiceGstPercent ?? invoiceGstPercent ?? 0);
     const rawGstAmount = Number(invDetails?.billing?.gstAmount ?? job?.invoiceGstAmount ?? invoiceGstAmount ?? 0);
-    const rawTotal = Number(invDetails?.billing?.total ?? job?.invoiceTotal ?? invoiceTotal ?? initialAmount ?? 0);
+    const rawTotal = Number(invDetails?.billing?.total ?? job?.invoiceTotal ?? invoiceTotal ?? 0);
 
-    // Check if the service charge / subtotal was entered as a tax-inclusive total
-    // (e.g. Total = 177, but 18% GST was added on top to make 208.86, OR subtotal = 177, total = 177 with 18% GST)
-    const isTaxInclusive =
-      gstPercent > 0 &&
-      rawSubtotal > 0 &&
-      (
-        Math.abs(rawSubtotal * (1 + gstPercent / 100) - rawTotal) < 0.05 ||
-        (rawTotal > 0 && Math.abs(rawSubtotal - rawTotal) < 0.05)
-      );
+    // Subtotal from API (or fallback if missing)
+    const subtotal = rawSubtotal > 0
+      ? rawSubtotal
+      : (rawTotal > 0 && gstPercent > 0
+          ? Math.round((rawTotal / (1 + gstPercent / 100)) * 100) / 100
+          : (rawTotal > 0 ? rawTotal : Number(initialAmount ?? 0)));
 
-    const total = isTaxInclusive
-      ? (Math.abs(rawSubtotal * (1 + gstPercent / 100) - rawTotal) < 0.05 ? rawSubtotal : rawTotal)
-      : rawTotal;
+    // GST Amount from API (or fallback calculation on subtotal)
+    const gstAmount = rawGstAmount > 0
+      ? rawGstAmount
+      : (gstPercent > 0 && subtotal > 0
+          ? Math.round(((subtotal * gstPercent) / 100) * 100) / 100
+          : 0);
 
-    const subtotal = isTaxInclusive
-      ? Math.round((total / (1 + gstPercent / 100)) * 100) / 100
-      : rawSubtotal;
-
-    const gstAmount = isTaxInclusive
-      ? Math.round((total - subtotal) * 100) / 100
-      : rawGstAmount;
+    // Total: always true invoice total (subtotal + GST - discount)
+    const total = rawTotal > 0
+      ? rawTotal
+      : Math.round((subtotal + gstAmount - discount) * 100) / 100;
 
     // Dynamic items
     let items = invDetails?.items;
     if (!items || items.length === 0) {
       const fallbackItems = [];
-      const serviceVal = isTaxInclusive
-        ? subtotal
-        : Number(job?.invoiceServiceCharge ?? job?.invoiceSubtotal ?? initialAmount ?? 0);
+      const labourVal = Number(job?.invoiceLabourCharge ?? 0);
+      const additionalVal = Number(job?.invoiceAdditionalCharge ?? 0);
+      const sparePartsTotal = (job?.spareParts && job.spareParts.length > 0)
+        ? job.spareParts.reduce((s, p) => s + (p.coverageType === "WARRANTY" ? 0 : (p.quantity || 1) * (p.unitPrice || 0)), 0)
+        : Number(job?.invoiceSparePartsAmount ?? 0);
+
+      const serviceVal = job?.invoiceServiceCharge != null
+        ? Number(job.invoiceServiceCharge)
+        : Math.max(0, subtotal - sparePartsTotal - labourVal - additionalVal);
 
       if (serviceVal > 0 || !job?.spareParts || job.spareParts.length === 0) {
         fallbackItems.push({
@@ -334,14 +337,14 @@ export const InvoiceGenerateScreen = () => {
           amount: serviceVal,
         });
       }
-      if (Number(job?.invoiceLabourCharge ?? 0) > 0) {
+      if (labourVal > 0) {
         fallbackItems.push({
           itemName: "LABOUR CHARGES",
           description: "",
           quantity: 1,
           unit: "Nos",
-          unitPrice: Number(job?.invoiceLabourCharge),
-          amount: Number(job?.invoiceLabourCharge),
+          unitPrice: labourVal,
+          amount: labourVal,
         });
       }
       if (job?.spareParts && job.spareParts.length > 0) {
@@ -357,31 +360,17 @@ export const InvoiceGenerateScreen = () => {
           });
         }
       }
-      if (Number(job?.invoiceAdditionalCharge ?? 0) > 0) {
+      if (additionalVal > 0) {
         fallbackItems.push({
           itemName: "ADDITIONAL CHARGES",
           description: "",
           quantity: 1,
           unit: "Nos",
-          unitPrice: Number(job?.invoiceAdditionalCharge),
-          amount: Number(job?.invoiceAdditionalCharge),
+          unitPrice: additionalVal,
+          amount: additionalVal,
         });
       }
       items = fallbackItems;
-    } else if (items && items.length > 0 && isTaxInclusive) {
-      // If items total equals the tax-inclusive total (e.g. 177), scale item amounts to base before tax (150)
-      const itemsSum = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      if (Math.abs(itemsSum - total) < 0.05) {
-        items = items.map((it) => {
-          const qty = Number(it.quantity || 1);
-          const baseAmt = Math.round((Number(it.amount || 0) / (1 + gstPercent / 100)) * 100) / 100;
-          return {
-            ...it,
-            unitPrice: Math.round((baseAmt / (qty || 1)) * 100) / 100,
-            amount: baseAmt,
-          };
-        });
-      }
     }
 
     const resolvedPaymentStatus =
